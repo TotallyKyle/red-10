@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import type { ServerToClientEvents, ClientToServerEvents, ClientGameView } from '@red10/shared';
+import type { ServerToClientEvents, ClientToServerEvents } from '@red10/shared';
 import {
   createRoom,
   joinRoom,
@@ -11,6 +11,10 @@ import {
   getPlayerList,
   getRoomForSocket,
 } from './lobby.js';
+import { GameEngine } from './game/GameEngine.js';
+
+/** Active game engines, keyed by roomId */
+const games = new Map<string, GameEngine>();
 
 const app = express();
 const httpServer = createServer(app);
@@ -94,33 +98,20 @@ io.on('connection', (socket) => {
     const { room } = result;
     const players = getPlayerList(room);
 
-    // Send a placeholder game state to all players in the room
-    const placeholderView: ClientGameView = {
-      gameId: room.id,
-      phase: 'dealing',
-      myHand: [],
-      players: players.map((p) => ({
-        id: p.id,
-        name: p.name,
-        seatIndex: p.seatIndex,
-        handSize: 0,
-        isOut: false,
-        finishOrder: null,
-        team: null,
-        revealedRed10Count: 0,
-        isConnected: p.isConnected,
-      })),
-      round: null,
-      doubling: null,
-      stakeMultiplier: 1,
-      isMyTurn: false,
-      validActions: [],
-      myTeam: 'red10',
-      finishOrder: [],
-      scoringTeam: null,
-    };
+    // Create the game engine
+    const engine = new GameEngine(
+      room.id,
+      players.map((p) => ({ id: p.id, name: p.name, seatIndex: p.seatIndex })),
+    );
+    engine.startGame();
+    games.set(room.id, engine);
 
-    io.to(room.id).emit('game:state', placeholderView);
+    // Send personalized game state to each player
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+
     console.log(`Game started in room ${room.id}`);
   });
 

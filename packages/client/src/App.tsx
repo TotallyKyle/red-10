@@ -1,24 +1,33 @@
+import { useState, useCallback } from 'react';
+import type { Card } from '@red10/shared';
 import { useSocket } from './hooks/useSocket.js';
 import Lobby from './components/Lobby.js';
+import GameTable from './components/GameTable.js';
 
 function App() {
   const socket = useSocket();
-  const { gameView } = socket;
+  const { gameView, mySocketId } = socket;
+  const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
-  // Game has started — show placeholder
-  if (gameView) {
+  const handleToggleCard = useCallback((card: Card) => {
+    setSelectedCards((prev) => {
+      const exists = prev.some((c) => c.id === card.id);
+      if (exists) {
+        return prev.filter((c) => c.id !== card.id);
+      }
+      return [...prev, card];
+    });
+  }, []);
+
+  // Game has started -- show game table
+  if (gameView && mySocketId) {
     return (
-      <div className="min-h-screen bg-green-900 flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-5xl font-bold text-white mb-4">Game Started!</h1>
-          <p className="text-green-300 text-lg">
-            Phase: <span className="font-mono text-emerald-400">{gameView.phase}</span>
-          </p>
-          <p className="text-green-400 mt-2 text-sm">
-            {gameView.players.length} players in game
-          </p>
-        </div>
-      </div>
+      <GameTable
+        gameView={gameView}
+        mySocketId={mySocketId}
+        selectedCards={selectedCards}
+        onToggleCard={handleToggleCard}
+      />
     );
   }
 
