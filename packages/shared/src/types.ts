@@ -222,9 +222,10 @@ export interface ServerToClientEvents {
   'team:revealed': (data: { playerId: string; team: Team; red10Count?: number }) => void;
   'double:declared': (data: { playerId: string; revealedCards?: Card[] }) => void;
   'game:scored': (result: GameResult) => void;
-  'room:player_joined': (data: { player: { id: string; name: string } }) => void;
+  'room:player_joined': (data: { player: { id: string; name: string }; hostId: string }) => void;
   'room:player_left': (data: { playerId: string }) => void;
   'room:player_ready': (data: { playerId: string }) => void;
+  'room:host_changed': (data: { hostId: string }) => void;
   'error': (data: { message: string; code: string }) => void;
 }
 
