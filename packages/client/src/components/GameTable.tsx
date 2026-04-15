@@ -11,6 +11,7 @@ interface GameTableProps {
   onToggleCard: (card: CardType) => void;
   onPlay: () => void;
   onPass: () => void;
+  onDefuse: () => void;
 }
 
 /**
@@ -30,7 +31,7 @@ const POSITIONS = [
   { top: '18%', left: '8%' },
 ] as const;
 
-function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass }: GameTableProps) {
+function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass, onDefuse }: GameTableProps) {
   const myPlayer = gameView.players.find((p) => p.id === mySocketId);
   const mySeatIndex = myPlayer?.seatIndex ?? 0;
 
@@ -121,6 +122,7 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, 
           selectedCards={selectedCards}
           onPlay={onPlay}
           onPass={onPass}
+          onDefuse={onDefuse}
           currentPlayerName={currentPlayerName}
         />
       </div>

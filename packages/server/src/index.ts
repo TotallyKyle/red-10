@@ -160,6 +160,19 @@ io.on('connection', (socket) => {
       format,
     });
 
+    // Check if any played cards are red 10s — emit team:revealed
+    const playedRed10s = data.cards.filter((c: { rank: string; isRed: boolean }) => c.rank === '10' && c.isRed);
+    if (playedRed10s.length > 0) {
+      const playerState = state.players.find((p) => p.id === socket.id);
+      if (playerState) {
+        io.to(room.id).emit('team:revealed', {
+          playerId: socket.id,
+          team: playerState.team!,
+          red10Count: playerState.revealedRed10Count,
+        });
+      }
+    }
+
     // Check if the player went out
     const player = state.players.find((p) => p.id === socket.id);
     if (player?.isOut && player.finishOrder !== null) {
@@ -175,6 +188,40 @@ io.on('connection', (socket) => {
       io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
     }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('play:defuse', (data, cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    const engine = games.get(room.id);
+    if (!engine) {
+      cb({ success: false, error: 'No active game' });
+      return;
+    }
+
+    const result = engine.defuse(socket.id, data.cards);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
+      return;
+    }
+
+    cb({ success: true });
+
+    // Emit bomb:defused event
+    io.to(room.id).emit('bomb:defused', {
+      defuserId: socket.id,
+      cards: data.cards,
+    });
 
     // Broadcast updated game state to all players
     for (const p of room.players.values()) {

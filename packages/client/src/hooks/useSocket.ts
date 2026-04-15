@@ -30,6 +30,7 @@ export interface UseSocketReturn {
   startGame: () => void;
   playCards: (cards: Card[]) => void;
   passAction: () => void;
+  defuseAction: (cards: Card[]) => void;
   mySocketId: string | null;
 }
 
@@ -157,6 +158,14 @@ export function useSocket(): UseSocketReturn {
       console.log(`[player:out] ${data.playerId} finished #${data.finishOrder}`);
     });
 
+    socket.on('bomb:defused', (data) => {
+      console.log(`[bomb:defused] ${data.defuserId} defused with ${data.cards.length} card(s)`);
+    });
+
+    socket.on('team:revealed', (data) => {
+      console.log(`[team:revealed] ${data.playerId} is on team ${data.team} (red10 count: ${data.red10Count})`);
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -245,6 +254,17 @@ export function useSocket(): UseSocketReturn {
     socket.emit('play:pass');
   }, []);
 
+  const defuseAction = useCallback((cards: Card[]) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('play:defuse', { cards }, (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Defuse failed');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
   return {
     isConnected,
     roomState,
@@ -256,6 +276,7 @@ export function useSocket(): UseSocketReturn {
     startGame,
     playCards,
     passAction,
+    defuseAction,
     mySocketId,
   };
 }

@@ -9,8 +9,10 @@ import type {
   PlayFormat,
   ActionType,
   RoundInfo,
+  BombInfo,
+  SpecialBombType,
 } from '@red10/shared';
-import { detectFormat, canBeat, getPlayValue, classifyBomb, rankValue, PLAYER_COUNT } from '@red10/shared';
+import { detectFormat, canBeat, getPlayValue, classifyBomb, rankValue, isRedTen, isBlackTen, isValidDefuse, defuseResultFormat, PLAYER_COUNT } from '@red10/shared';
 import { createDeck, shuffle, deal } from './Deck.js';
 
 interface PlayerInit {
@@ -161,6 +163,9 @@ export class GameEngine {
       player.hand = player.hand.filter((c) => !playedCardIds.has(c.id));
       player.handSize = player.hand.length;
 
+      // Check if any played cards are red 10s — reveal team
+      this.checkRedTenReveal(player, actualCards);
+
       // Update round state
       round.currentFormat = format;
       round.lastPlay = play;
@@ -210,6 +215,9 @@ export class GameEngine {
     // Remove cards from hand
     player.hand = player.hand.filter((c) => !playedCardIds.has(c.id));
     player.handSize = player.hand.length;
+
+    // Check if any played cards are red 10s — reveal team
+    this.checkRedTenReveal(player, actualCards);
 
     // Update round state
     // If a bomb was played on a non-bomb round, the format changes to bomb
@@ -425,10 +433,29 @@ export class GameEngine {
     const round = this.state.round;
     if (!round) return [];
 
-    if (round.currentPlayerId !== playerId) return [];
-
     const player = this.state.players.find((p) => p.id === playerId);
     if (!player || player.isOut) return [];
+
+    // Defuse can be done by any player (interrupt), not just current turn player
+    // Check if the last play was a red 10 special bomb and this player can defuse
+    if (round.lastPlay?.specialBomb === 'red10_2' || round.lastPlay?.specialBomb === 'red10_3') {
+      const neededBlack10s = round.lastPlay.specialBomb === 'red10_2' ? 2 : 3;
+      const black10Count = player.hand.filter((c) => isBlackTen(c)).length;
+      if (black10Count >= neededBlack10s) {
+        // Player can defuse — this is available even when it's not their turn
+        const actions: ActionType[] = ['defuse'];
+        // If it's also their turn, they can play/pass normally too
+        if (round.currentPlayerId === playerId) {
+          actions.push('play');
+          if (round.currentFormat !== null || round.leaderId !== playerId) {
+            actions.push('pass');
+          }
+        }
+        return actions;
+      }
+    }
+
+    if (round.currentPlayerId !== playerId) return [];
 
     const actions: ActionType[] = ['play'];
 
@@ -486,6 +513,113 @@ export class GameEngine {
       finishOrder: this.state.finishOrder,
       scoringTeam: this.state.scoringTeam,
     };
+  }
+
+  /**
+   * Process a defuse attempt against a red 10 special bomb.
+   */
+  defuse(playerId: string, cards: Card[]): { success: boolean; error?: string } {
+    if (this.state.phase !== 'playing') {
+      return { success: false, error: 'Game is not in playing phase' };
+    }
+
+    const round = this.state.round;
+    if (!round) {
+      return { success: false, error: 'No active round' };
+    }
+
+    const lastPlay = round.lastPlay;
+    if (!lastPlay) {
+      return { success: false, error: 'No play to defuse' };
+    }
+
+    // Only red 10 special bombs can be defused
+    if (!lastPlay.specialBomb || (lastPlay.specialBomb !== 'red10_2' && lastPlay.specialBomb !== 'red10_3')) {
+      return { success: false, error: 'Only red 10 bombs can be defused' };
+    }
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player) {
+      return { success: false, error: 'Player not found' };
+    }
+
+    if (player.isOut) {
+      return { success: false, error: 'Player is out' };
+    }
+
+    // Validate card ownership
+    const handIds = new Set(player.hand.map((c) => c.id));
+    for (const card of cards) {
+      if (!handIds.has(card.id)) {
+        return { success: false, error: `Card ${card.id} is not in your hand` };
+      }
+    }
+
+    // Use actual cards from hand
+    const playedCardIds = new Set(cards.map((c) => c.id));
+    const actualCards = player.hand.filter((c) => playedCardIds.has(c.id));
+
+    // Classify the bomb being defused
+    const bombInfo = classifyBomb(lastPlay.cards);
+    if (!bombInfo) {
+      return { success: false, error: 'Last play is not a valid bomb' };
+    }
+
+    // Validate the defuse
+    if (!isValidDefuse(actualCards, bombInfo)) {
+      return { success: false, error: 'Invalid defuse: need matching number of black 10s' };
+    }
+
+    // Remove black 10s from defuser's hand
+    player.hand = player.hand.filter((c) => !playedCardIds.has(c.id));
+    player.handSize = player.hand.length;
+
+    // Determine what format the round continues as
+    const newFormat = defuseResultFormat(lastPlay.specialBomb);
+
+    // The defuse cards become the current play
+    const defusePlay: Play = {
+      playerId,
+      cards: actualCards,
+      format: newFormat,
+      rankValue: newFormat === 'bomb'
+        ? (classifyBomb(actualCards)?.rankValue ?? rankValue('10'))
+        : getPlayValue(actualCards, newFormat),
+      length: actualCards.length,
+      specialBomb: undefined,
+      timestamp: Date.now(),
+    };
+
+    round.currentFormat = newFormat;
+    round.lastPlay = defusePlay;
+    round.plays.push(defusePlay);
+    round.passCount = 0;
+
+    // Check if player is out
+    if (player.hand.length === 0) {
+      this.markPlayerOut(player);
+    }
+
+    if (this.isGameOver()) {
+      return { success: true };
+    }
+
+    // Continue from the defuser in turn order
+    round.currentPlayerId = this.getNextActivePlayer(playerId);
+
+    this.checkRoundEnd();
+
+    return { success: true };
+  }
+
+  /**
+   * Check if played cards contain red 10s and update the player's reveal state.
+   */
+  private checkRedTenReveal(player: PlayerState, playedCards: Card[]): void {
+    const red10Count = playedCards.filter((c) => isRedTen(c)).length;
+    if (red10Count > 0) {
+      player.revealedRed10Count += red10Count;
+    }
   }
 
   /**
