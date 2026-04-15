@@ -6,7 +6,7 @@ import GameTable from './components/GameTable.js';
 
 function App() {
   const socket = useSocket();
-  const { gameView, mySocketId, playCards, passAction, defuseAction } = socket;
+  const { gameView, mySocketId, playCards, passAction, defuseAction, chaAction, goChaAction, declineChaAction } = socket;
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
   const handleToggleCard = useCallback((card: Card) => {
@@ -45,6 +45,35 @@ function App() {
     }
   }, [gameView, defuseAction]);
 
+  const handleCha = useCallback(() => {
+    if (!gameView) return;
+    const triggerRank = gameView.round?.chaGoState?.triggerRank;
+    if (!triggerRank) return;
+    // Auto-select a pair of the trigger rank from hand
+    const matchingCards = gameView.myHand.filter((c) => c.rank === triggerRank);
+    if (matchingCards.length >= 2) {
+      chaAction(matchingCards.slice(0, 2));
+      setSelectedCards([]);
+    }
+  }, [gameView, chaAction]);
+
+  const handleGoCha = useCallback(() => {
+    if (!gameView) return;
+    const triggerRank = gameView.round?.chaGoState?.triggerRank;
+    if (!triggerRank) return;
+    // Auto-select 3 of the trigger rank from hand
+    const matchingCards = gameView.myHand.filter((c) => c.rank === triggerRank);
+    if (matchingCards.length >= 3) {
+      goChaAction(matchingCards.slice(0, 3));
+      setSelectedCards([]);
+    }
+  }, [gameView, goChaAction]);
+
+  const handleDeclineCha = useCallback(() => {
+    declineChaAction();
+    setSelectedCards([]);
+  }, [declineChaAction]);
+
   // Game has started -- show game table
   if (gameView && mySocketId) {
     return (
@@ -56,6 +85,9 @@ function App() {
         onPlay={handlePlay}
         onPass={handlePass}
         onDefuse={handleDefuse}
+        onCha={handleCha}
+        onGoCha={handleGoCha}
+        onDeclineCha={handleDeclineCha}
       />
     );
   }

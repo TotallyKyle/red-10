@@ -14,6 +14,12 @@ const FORMAT_LABELS: Record<string, string> = {
   bomb: 'Bomb',
 };
 
+const CHA_GO_PHASE_LABELS: Record<string, string> = {
+  waiting_cha: 'Waiting for Cha...',
+  waiting_go: 'Waiting for Go...',
+  waiting_final_cha: 'Waiting for Final Cha...',
+};
+
 function PlayArea({ round, players }: PlayAreaProps) {
   if (!round) {
     return (
@@ -29,6 +35,7 @@ function PlayArea({ round, players }: PlayAreaProps) {
     : null;
 
   const formatLabel = round.currentFormat ? FORMAT_LABELS[round.currentFormat] ?? round.currentFormat : null;
+  const chaGo = round.chaGoState;
 
   return (
     <div className="flex flex-col items-center gap-2">
@@ -37,6 +44,18 @@ function PlayArea({ round, players }: PlayAreaProps) {
         <span className="text-green-300 text-xs uppercase tracking-wider font-semibold">
           {formatLabel}
         </span>
+      )}
+
+      {/* Cha-go indicator */}
+      {chaGo && (
+        <div className="flex flex-col items-center gap-1">
+          <span className="text-amber-400 text-xs font-bold uppercase tracking-wider animate-pulse">
+            Cha-Go: {chaGo.triggerRank}
+          </span>
+          <span className="text-amber-300 text-xs">
+            {CHA_GO_PHASE_LABELS[chaGo.phase] ?? chaGo.phase}
+          </span>
+        </div>
       )}
 
       {/* Cards */}

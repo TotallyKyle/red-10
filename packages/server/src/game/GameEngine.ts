@@ -11,8 +11,10 @@ import type {
   RoundInfo,
   BombInfo,
   SpecialBombType,
+  Rank,
+  ChaGoState,
 } from '@red10/shared';
-import { detectFormat, canBeat, getPlayValue, classifyBomb, rankValue, isRedTen, isBlackTen, isValidDefuse, defuseResultFormat, PLAYER_COUNT } from '@red10/shared';
+import { detectFormat, canBeat, getPlayValue, classifyBomb, rankValue, isRedTen, isBlackTen, isValidDefuse, defuseResultFormat, PLAYER_COUNT, COPIES_PER_RANK } from '@red10/shared';
 import { createDeck, shuffle, deal } from './Deck.js';
 
 interface PlayerInit {
@@ -145,6 +147,13 @@ export class GameEngine {
       return { success: false, error: 'Invalid card combination' };
     }
 
+    // During cha-go waiting_go phase, validate the card is a single of the trigger rank
+    if (round.chaGoState && round.chaGoState.phase === 'waiting_go') {
+      if (actualCards.length !== 1 || actualCards[0].rank !== round.chaGoState.triggerRank) {
+        return { success: false, error: `During cha-go, must play a single ${round.chaGoState.triggerRank}` };
+      }
+    }
+
     // If this is the opening play of the round (no format set yet)
     if (round.currentFormat === null) {
       // Leader sets the format - any valid format is fine
@@ -182,6 +191,12 @@ export class GameEngine {
         return { success: true };
       }
 
+      // Check for cha-go opportunity after a single card play in a singles round
+      if (format === 'single' && this.checkChaGoOpportunity(actualCards[0], playerId)) {
+        // Cha-go mode activated — don't advance turn normally
+        return { success: true };
+      }
+
       // Move to next player
       round.currentPlayerId = this.getNextActivePlayer(playerId);
 
@@ -192,13 +207,16 @@ export class GameEngine {
       return { success: true };
     }
 
-    // Subsequent play - must beat the current play
+    // Subsequent play - must beat the current play (unless in cha-go waiting_go)
     if (round.lastPlay === null) {
       return { success: false, error: 'Unexpected state: format set but no last play' };
     }
 
-    if (!canBeat(actualCards, round.lastPlay)) {
-      return { success: false, error: 'Your play does not beat the current play' };
+    // During waiting_go, we already validated above; skip canBeat check
+    if (!round.chaGoState || round.chaGoState.phase !== 'waiting_go') {
+      if (!canBeat(actualCards, round.lastPlay)) {
+        return { success: false, error: 'Your play does not beat the current play' };
+      }
     }
 
     // Create the play
@@ -238,6 +256,32 @@ export class GameEngine {
       return { success: true };
     }
 
+    // Handle cha-go waiting_go: after go is played, transition to waiting_final_cha
+    if (round.chaGoState && round.chaGoState.phase === 'waiting_go') {
+      round.chaGoState.goPlayerId = playerId;
+      round.chaGoState.remainingCopies = this.countRemainingCopies(round.chaGoState.triggerRank);
+      // Check if anyone can do the final cha (pair of trigger rank)
+      const finalChaEligible = this.getEligibleChaPlayers(round.chaGoState.triggerRank, playerId);
+      if (finalChaEligible.length > 0) {
+        round.chaGoState.phase = 'waiting_final_cha';
+        round.chaGoState.eligiblePlayerIds = finalChaEligible;
+        round.chaGoState.declinedPlayerIds = [];
+        // Don't advance turn normally — cha-go sub-state handles it
+        return { success: true };
+      } else {
+        // No one can final cha — go player wins the round
+        this.endChaGoRound(playerId);
+        return { success: true };
+      }
+    }
+
+    // Check for cha-go opportunity after a single card play in a singles round
+    if (format === 'single' && round.currentFormat === 'single' && !round.chaGoState) {
+      if (this.checkChaGoOpportunity(actualCards[0], playerId)) {
+        return { success: true };
+      }
+    }
+
     // Move to next player
     round.currentPlayerId = this.getNextActivePlayer(playerId);
 
@@ -258,6 +302,32 @@ export class GameEngine {
     const round = this.state.round;
     if (!round) {
       return { success: false, error: 'No active round' };
+    }
+
+    // During cha-go waiting_go phase, pass works within cha-go turn order
+    if (round.chaGoState && round.chaGoState.phase === 'waiting_go') {
+      if (round.currentPlayerId !== playerId) {
+        return { success: false, error: 'Not your turn' };
+      }
+      round.passCount++;
+      // Check if all active players (except the cha player) have passed
+      const activePlayers = this.state.players.filter((p) => !p.isOut);
+      const chaPlayer = round.chaGoState.chaPlayerId;
+      const chaPlayerIsOut = this.state.players.find((p) => p.id === chaPlayer)?.isOut ?? false;
+      let passesNeeded: number;
+      if (chaPlayerIsOut) {
+        passesNeeded = activePlayers.length;
+      } else {
+        passesNeeded = activePlayers.length - 1;
+      }
+      if (round.passCount >= passesNeeded) {
+        // Everyone passed on go — cha player wins the round
+        this.endChaGoRound(chaPlayer!);
+        return { success: true };
+      }
+      // Advance to next active player
+      round.currentPlayerId = this.getNextActivePlayer(playerId);
+      return { success: true };
     }
 
     if (round.currentPlayerId !== playerId) {
@@ -436,6 +506,56 @@ export class GameEngine {
     const player = this.state.players.find((p) => p.id === playerId);
     if (!player || player.isOut) return [];
 
+    // ---- Cha-Go phases ----
+    if (round.chaGoState) {
+      const cg = round.chaGoState;
+      const triggerRank = cg.triggerRank;
+      const copiesInHand = player.hand.filter((c) => c.rank === triggerRank).length;
+
+      if (cg.phase === 'waiting_cha') {
+        // Only eligible players who haven't declined can cha
+        if (cg.eligiblePlayerIds.includes(playerId) && !cg.declinedPlayerIds.includes(playerId)) {
+          const actions: ActionType[] = ['decline_cha'];
+          if (copiesInHand >= 2) {
+            actions.unshift('cha');
+          }
+          if (copiesInHand >= 3) {
+            actions.unshift('go_cha');
+          }
+          return actions;
+        }
+        return [];
+      }
+
+      if (cg.phase === 'waiting_go') {
+        if (round.currentPlayerId === playerId) {
+          const actions: ActionType[] = ['pass'];
+          if (copiesInHand >= 1) {
+            actions.unshift('play');
+          }
+          if (copiesInHand >= 3) {
+            actions.unshift('go_cha');
+          }
+          return actions;
+        }
+        return [];
+      }
+
+      if (cg.phase === 'waiting_final_cha') {
+        if (cg.eligiblePlayerIds.includes(playerId) && !cg.declinedPlayerIds.includes(playerId)) {
+          const actions: ActionType[] = ['decline_cha'];
+          if (copiesInHand >= 2) {
+            actions.unshift('cha');
+          }
+          if (copiesInHand >= 3) {
+            actions.unshift('go_cha');
+          }
+          return actions;
+        }
+        return [];
+      }
+    }
+
     // Defuse can be done by any player (interrupt), not just current turn player
     // Check if the last play was a red 10 special bomb and this player can defuse
     if (round.lastPlay?.specialBomb === 'red10_2' || round.lastPlay?.specialBomb === 'red10_3') {
@@ -610,6 +730,336 @@ export class GameEngine {
     this.checkRoundEnd();
 
     return { success: true };
+  }
+
+  // ---- Cha-Go methods ----
+
+  /**
+   * Count how many copies of a rank are still in players' hands.
+   */
+  private countRemainingCopies(rank: Rank): number {
+    let count = 0;
+    for (const p of this.state.players) {
+      count += p.hand.filter((c) => c.rank === rank).length;
+    }
+    return count;
+  }
+
+  /**
+   * Get player IDs (other than excludePlayerId) who have 2+ copies of rank in hand.
+   */
+  private getEligibleChaPlayers(rank: Rank, excludePlayerId: string): string[] {
+    const eligible: string[] = [];
+    for (const p of this.state.players) {
+      if (p.id === excludePlayerId || p.isOut) continue;
+      const copies = p.hand.filter((c) => c.rank === rank).length;
+      if (copies >= 2) {
+        eligible.push(p.id);
+      }
+    }
+    return eligible;
+  }
+
+  /**
+   * Called after a single is played — checks if cha-go is possible.
+   * Returns true if cha-go was activated.
+   */
+  private checkChaGoOpportunity(playedCard: Card, playerId: string): boolean {
+    const round = this.state.round;
+    if (!round) return false;
+
+    const rank = playedCard.rank;
+    const eligible = this.getEligibleChaPlayers(rank, playerId);
+
+    if (eligible.length === 0) {
+      return false;
+    }
+
+    // Activate cha-go
+    round.chaGoState = {
+      triggerRank: rank,
+      phase: 'waiting_cha',
+      chaPlayerId: null,
+      goPlayerId: null,
+      eligiblePlayerIds: eligible,
+      declinedPlayerIds: [],
+      remainingCopies: this.countRemainingCopies(rank),
+    };
+
+    return true;
+  }
+
+  /**
+   * Player plays a cha (pair of the trigger rank).
+   */
+  cha(playerId: string, cards: Card[]): { success: boolean; error?: string } {
+    if (this.state.phase !== 'playing') {
+      return { success: false, error: 'Game is not in playing phase' };
+    }
+
+    const round = this.state.round;
+    if (!round) {
+      return { success: false, error: 'No active round' };
+    }
+
+    const cg = round.chaGoState;
+    if (!cg) {
+      return { success: false, error: 'Not in cha-go state' };
+    }
+
+    if (cg.phase !== 'waiting_cha' && cg.phase !== 'waiting_final_cha') {
+      return { success: false, error: 'Not waiting for cha' };
+    }
+
+    if (!cg.eligiblePlayerIds.includes(playerId)) {
+      return { success: false, error: 'You are not eligible to cha' };
+    }
+
+    if (cg.declinedPlayerIds.includes(playerId)) {
+      return { success: false, error: 'You already declined' };
+    }
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player || player.isOut) {
+      return { success: false, error: 'Player not found or is out' };
+    }
+
+    // Validate card ownership
+    const handIds = new Set(player.hand.map((c) => c.id));
+    for (const card of cards) {
+      if (!handIds.has(card.id)) {
+        return { success: false, error: `Card ${card.id} is not in your hand` };
+      }
+    }
+
+    // Use actual cards from hand
+    const playedCardIds = new Set(cards.map((c) => c.id));
+    const actualCards = player.hand.filter((c) => playedCardIds.has(c.id));
+
+    // Must be exactly 2 cards of the trigger rank
+    if (actualCards.length !== 2) {
+      return { success: false, error: 'Cha requires exactly 2 cards' };
+    }
+
+    if (!actualCards.every((c) => c.rank === cg.triggerRank)) {
+      return { success: false, error: `Cha cards must be of rank ${cg.triggerRank}` };
+    }
+
+    // Remove cards from hand
+    player.hand = player.hand.filter((c) => !playedCardIds.has(c.id));
+    player.handSize = player.hand.length;
+
+    // Check red 10 reveal
+    this.checkRedTenReveal(player, actualCards);
+
+    // Create the play
+    const play: Play = {
+      playerId,
+      cards: actualCards,
+      format: 'pair',
+      rankValue: getPlayValue(actualCards, 'pair'),
+      length: 2,
+      timestamp: Date.now(),
+    };
+
+    round.lastPlay = play;
+    round.plays.push(play);
+    round.passCount = 0;
+
+    // Check if player is out
+    if (player.hand.length === 0) {
+      this.markPlayerOut(player);
+    }
+
+    if (this.isGameOver()) {
+      round.chaGoState = null;
+      return { success: true };
+    }
+
+    if (cg.phase === 'waiting_final_cha') {
+      // Final cha — this player wins the round
+      this.endChaGoRound(playerId);
+      return { success: true };
+    }
+
+    // First cha — transition to waiting_go
+    cg.chaPlayerId = playerId;
+    cg.phase = 'waiting_go';
+    cg.eligiblePlayerIds = [];
+    cg.declinedPlayerIds = [];
+    cg.remainingCopies = this.countRemainingCopies(cg.triggerRank);
+
+    // Play continues clockwise from the cha player
+    round.currentPlayerId = this.getNextActivePlayer(playerId);
+
+    return { success: true };
+  }
+
+  /**
+   * Player plays a go-cha (3 of the trigger rank, auto-wins).
+   */
+  goCha(playerId: string, cards: Card[]): { success: boolean; error?: string } {
+    if (this.state.phase !== 'playing') {
+      return { success: false, error: 'Game is not in playing phase' };
+    }
+
+    const round = this.state.round;
+    if (!round) {
+      return { success: false, error: 'No active round' };
+    }
+
+    const cg = round.chaGoState;
+    if (!cg) {
+      return { success: false, error: 'Not in cha-go state' };
+    }
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player || player.isOut) {
+      return { success: false, error: 'Player not found or is out' };
+    }
+
+    // Go-cha can happen during any cha-go phase
+    // During waiting_cha / waiting_final_cha: eligible players can go-cha
+    // During waiting_go: the current turn player can go-cha
+    if (cg.phase === 'waiting_cha' || cg.phase === 'waiting_final_cha') {
+      if (!cg.eligiblePlayerIds.includes(playerId) || cg.declinedPlayerIds.includes(playerId)) {
+        return { success: false, error: 'You are not eligible for go-cha' };
+      }
+    } else if (cg.phase === 'waiting_go') {
+      if (round.currentPlayerId !== playerId) {
+        return { success: false, error: 'Not your turn for go-cha' };
+      }
+    }
+
+    // Validate card ownership
+    const handIds = new Set(player.hand.map((c) => c.id));
+    for (const card of cards) {
+      if (!handIds.has(card.id)) {
+        return { success: false, error: `Card ${card.id} is not in your hand` };
+      }
+    }
+
+    const playedCardIds = new Set(cards.map((c) => c.id));
+    const actualCards = player.hand.filter((c) => playedCardIds.has(c.id));
+
+    // Must be exactly 3 cards of the trigger rank
+    if (actualCards.length !== 3) {
+      return { success: false, error: 'Go-cha requires exactly 3 cards' };
+    }
+
+    if (!actualCards.every((c) => c.rank === cg.triggerRank)) {
+      return { success: false, error: `Go-cha cards must be of rank ${cg.triggerRank}` };
+    }
+
+    // Remove cards from hand
+    player.hand = player.hand.filter((c) => !playedCardIds.has(c.id));
+    player.handSize = player.hand.length;
+
+    this.checkRedTenReveal(player, actualCards);
+
+    // Create the play
+    const play: Play = {
+      playerId,
+      cards: actualCards,
+      format: 'single', // stays as single format for the round
+      rankValue: getPlayValue([actualCards[0]], 'single'),
+      length: 3,
+      timestamp: Date.now(),
+    };
+
+    round.lastPlay = play;
+    round.plays.push(play);
+
+    // Check if player is out
+    if (player.hand.length === 0) {
+      this.markPlayerOut(player);
+    }
+
+    if (this.isGameOver()) {
+      round.chaGoState = null;
+      return { success: true };
+    }
+
+    // Go-cha auto-wins the round
+    this.endChaGoRound(playerId);
+
+    return { success: true };
+  }
+
+  /**
+   * Player declines to cha.
+   */
+  declineCha(playerId: string): { success: boolean; error?: string } {
+    if (this.state.phase !== 'playing') {
+      return { success: false, error: 'Game is not in playing phase' };
+    }
+
+    const round = this.state.round;
+    if (!round) {
+      return { success: false, error: 'No active round' };
+    }
+
+    const cg = round.chaGoState;
+    if (!cg) {
+      return { success: false, error: 'Not in cha-go state' };
+    }
+
+    if (cg.phase !== 'waiting_cha' && cg.phase !== 'waiting_final_cha') {
+      return { success: false, error: 'Not waiting for cha' };
+    }
+
+    if (!cg.eligiblePlayerIds.includes(playerId)) {
+      return { success: false, error: 'You are not eligible to cha' };
+    }
+
+    if (cg.declinedPlayerIds.includes(playerId)) {
+      return { success: false, error: 'You already declined' };
+    }
+
+    cg.declinedPlayerIds.push(playerId);
+
+    // Check if all eligible players have declined
+    if (cg.declinedPlayerIds.length >= cg.eligiblePlayerIds.length) {
+      if (cg.phase === 'waiting_cha') {
+        // Nobody cha'd — normal play resumes. The single stands.
+        round.chaGoState = null;
+        // Advance to next player after the one who played the single
+        const lastPlayerId = round.lastPlay!.playerId;
+        round.currentPlayerId = this.getNextActivePlayer(lastPlayerId);
+        this.checkRoundEnd();
+      } else {
+        // waiting_final_cha — nobody did final cha, go player wins
+        this.endChaGoRound(cg.goPlayerId!);
+      }
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * End a cha-go round. The winner gets to lead the next round.
+   */
+  private endChaGoRound(winnerId: string): void {
+    const round = this.state.round;
+    if (!round) return;
+
+    round.chaGoState = null;
+
+    const winnerIsOut = this.state.players.find((p) => p.id === winnerId)?.isOut ?? false;
+    const activePlayers = this.state.players.filter((p) => !p.isOut);
+
+    let nextLeaderId: string;
+    if (winnerIsOut) {
+      nextLeaderId = this.getNextActivePlayer(winnerId);
+    } else {
+      nextLeaderId = winnerId;
+    }
+
+    if (activePlayers.length >= 2 || (activePlayers.length === 1 && !winnerIsOut)) {
+      this.startNewRound(nextLeaderId);
+    } else {
+      this.checkGameEnd();
+    }
   }
 
   /**

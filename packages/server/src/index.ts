@@ -182,6 +182,18 @@ io.on('connection', (socket) => {
       });
     }
 
+    // Check if cha-go was triggered
+    if (state.round?.chaGoState) {
+      const cg = state.round.chaGoState;
+      // Emit opportunity to eligible players
+      for (const eligibleId of cg.eligiblePlayerIds) {
+        io.to(eligibleId).emit('cha_go:opportunity', {
+          rank: cg.triggerRank,
+          timeoutMs: 10000,
+        });
+      }
+    }
+
     // Check if a new round was started (round has no plays yet = just started)
     if (state.round && state.round.plays.length === 0) {
       // A round was won by the last player who played, then a new round started
@@ -222,6 +234,89 @@ io.on('connection', (socket) => {
       defuserId: socket.id,
       cards: data.cards,
     });
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('play:cha', (data, cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    const engine = games.get(room.id);
+    if (!engine) {
+      cb({ success: false, error: 'No active game' });
+      return;
+    }
+
+    const result = engine.cha(socket.id, data.cards);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
+      return;
+    }
+
+    cb({ success: true });
+
+    const state = engine.getState();
+    const triggerRank = state.round?.chaGoState?.triggerRank
+      ?? state.round?.plays?.[state.round.plays.length - 1]?.cards?.[0]?.rank;
+
+    if (triggerRank) {
+      io.to(room.id).emit('cha_go:started', { rank: triggerRank as any, chaPlayerId: socket.id });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('play:go_cha', (data, cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    const engine = games.get(room.id);
+    if (!engine) {
+      cb({ success: false, error: 'No active game' });
+      return;
+    }
+
+    const result = engine.goCha(socket.id, data.cards);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
+      return;
+    }
+
+    cb({ success: true });
+
+    io.to(room.id).emit('cha_go:go_cha', { playerId: socket.id, cards: data.cards });
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('cha:decline', () => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const engine = games.get(room.id);
+    if (!engine) return;
+
+    const result = engine.declineCha(socket.id);
+    if (!result.success) return;
 
     // Broadcast updated game state to all players
     for (const p of room.players.values()) {

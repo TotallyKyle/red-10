@@ -57,6 +57,12 @@ export interface ChaGoState {
   phase: ChaGoPhase;
   /** Player who played the cha (pair) */
   chaPlayerId: string | null;
+  /** Player who played the go (single after cha) */
+  goPlayerId: string | null;
+  /** Player IDs eligible to cha/go in the current phase */
+  eligiblePlayerIds: string[];
+  /** Player IDs who have declined in the current phase */
+  declinedPlayerIds: string[];
   /** How many copies of this rank remain unplayed across all hands */
   remainingCopies: number;
 }
@@ -155,6 +161,7 @@ export type ActionType =
   | 'pass'
   | 'cha'
   | 'go_cha'
+  | 'decline_cha'
   | 'double'
   | 'quadruple'
   | 'skip_double'

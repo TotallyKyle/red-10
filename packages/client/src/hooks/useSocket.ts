@@ -31,6 +31,9 @@ export interface UseSocketReturn {
   playCards: (cards: Card[]) => void;
   passAction: () => void;
   defuseAction: (cards: Card[]) => void;
+  chaAction: (cards: Card[]) => void;
+  goChaAction: (cards: Card[]) => void;
+  declineChaAction: () => void;
   mySocketId: string | null;
 }
 
@@ -166,6 +169,18 @@ export function useSocket(): UseSocketReturn {
       console.log(`[team:revealed] ${data.playerId} is on team ${data.team} (red10 count: ${data.red10Count})`);
     });
 
+    socket.on('cha_go:started', (data) => {
+      console.log(`[cha_go:started] Cha on rank ${data.rank} by ${data.chaPlayerId}`);
+    });
+
+    socket.on('cha_go:opportunity', (data) => {
+      console.log(`[cha_go:opportunity] You can cha on rank ${data.rank} (timeout: ${data.timeoutMs}ms)`);
+    });
+
+    socket.on('cha_go:go_cha', (data) => {
+      console.log(`[cha_go:go_cha] ${data.playerId} played go-cha with ${data.cards.length} cards`);
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -265,6 +280,34 @@ export function useSocket(): UseSocketReturn {
     });
   }, []);
 
+  const chaAction = useCallback((cards: Card[]) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('play:cha', { cards }, (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Cha failed');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
+  const goChaAction = useCallback((cards: Card[]) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('play:go_cha', { cards }, (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Go-cha failed');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
+  const declineChaAction = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('cha:decline');
+  }, []);
+
   return {
     isConnected,
     roomState,
@@ -277,6 +320,9 @@ export function useSocket(): UseSocketReturn {
     playCards,
     passAction,
     defuseAction,
+    chaAction,
+    goChaAction,
+    declineChaAction,
     mySocketId,
   };
 }
