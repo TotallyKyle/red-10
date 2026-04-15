@@ -6,6 +6,11 @@ import {
   BomberStrategy,
   ChaGoHunterStrategy,
 } from './strategies.js';
+import {
+  SmartRacerStrategy,
+  HandSizeExploiterStrategy,
+  TeamCoordinatorStrategy,
+} from './advancedStrategies.js';
 import type { PlayerStrategy } from './strategies.js';
 
 const allRandom: PlayerStrategy[] = Array(6).fill(RandomStrategy);
@@ -20,6 +25,24 @@ const mixed: PlayerStrategy[] = [
   ChaGoHunterStrategy,
   RandomStrategy,
   AggressiveStrategy,
+];
+
+const advancedMixed: PlayerStrategy[] = [
+  SmartRacerStrategy,
+  HandSizeExploiterStrategy,
+  TeamCoordinatorStrategy,
+  SmartRacerStrategy,
+  HandSizeExploiterStrategy,
+  TeamCoordinatorStrategy,
+];
+
+const fullMix: PlayerStrategy[] = [
+  RandomStrategy,
+  AggressiveStrategy,
+  SmartRacerStrategy,
+  HandSizeExploiterStrategy,
+  TeamCoordinatorStrategy,
+  BomberStrategy,
 ];
 
 describe('Game Simulator', () => {
@@ -125,7 +148,72 @@ describe('Game Simulator', () => {
     });
     const result = simulator.run();
 
-    console.log('=== Simulation Statistics (500 games, mixed strategies) ===');
+    console.log('=== Simulation Statistics (500 games, basic mixed strategies) ===');
+    console.log(`Games completed: ${result.gamesCompleted}/${result.gamesPlayed}`);
+    console.log(`Games failed: ${result.gamesFailed}`);
+    console.log(`Violations: ${result.violations.length}`);
+    console.log(`Errors: ${result.errors.length}`);
+    console.log(`Avg rounds/game: ${result.stats.avgRoundsPerGame.toFixed(1)}`);
+    console.log(`Avg actions/game: ${result.stats.avgActionsPerGame.toFixed(1)}`);
+    console.log(`Red10 wins: ${result.stats.red10Wins}`);
+    console.log(`Black10 wins: ${result.stats.black10Wins}`);
+    console.log(`Scoring team failures: ${result.stats.scoringTeamFailures}`);
+    console.log(`Doubles occurred: ${result.stats.doublesOccurred}`);
+    console.log(`Cha-gos occurred: ${result.stats.chaGosOccurred}`);
+    console.log(`Defuses occurred: ${result.stats.defusesOccurred}`);
+    console.log(`Bombs played: ${result.stats.bombsPlayed}`);
+
+    expect(result.gamesCompleted).toBe(500);
+  });
+});
+
+describe('Advanced Strategies', () => {
+  it('runs 200 games with advanced strategies without violations', () => {
+    const simulator = new GameSimulator({
+      numGames: 200,
+      strategies: advancedMixed,
+    });
+    const result = simulator.run();
+
+    if (result.violations.length > 0) {
+      console.log('VIOLATIONS:', JSON.stringify(result.violations.slice(0, 3), null, 2));
+    }
+    if (result.errors.length > 0) {
+      console.log('ERRORS:', result.errors.slice(0, 3).map(e => e.error));
+    }
+
+    expect(result.violations).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.gamesCompleted).toBe(200);
+  });
+
+  it('runs 200 games with full mix (basic + advanced) without violations', () => {
+    const simulator = new GameSimulator({
+      numGames: 200,
+      strategies: fullMix,
+    });
+    const result = simulator.run();
+
+    if (result.violations.length > 0) {
+      console.log('VIOLATIONS:', JSON.stringify(result.violations.slice(0, 3), null, 2));
+    }
+    if (result.errors.length > 0) {
+      console.log('ERRORS:', result.errors.slice(0, 3).map(e => e.error));
+    }
+
+    expect(result.violations).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.gamesCompleted).toBe(200);
+  });
+
+  it('prints advanced strategy statistics', () => {
+    const simulator = new GameSimulator({
+      numGames: 500,
+      strategies: fullMix,
+    });
+    const result = simulator.run();
+
+    console.log('=== Simulation Statistics (500 games, full mix with advanced) ===');
     console.log(`Games completed: ${result.gamesCompleted}/${result.gamesPlayed}`);
     console.log(`Games failed: ${result.gamesFailed}`);
     console.log(`Violations: ${result.violations.length}`);
