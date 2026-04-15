@@ -38,6 +38,10 @@ function createEngineWithHands(hands: Card[][]): GameEngine {
     state.players[i].team = hasRed10 ? 'red10' : 'black10';
   }
 
+  // Skip doubling phase, go straight to playing
+  state.phase = 'playing';
+  state.doubling = null;
+
   // Reset the round to start fresh with our hands
   engine.startNewRound('p0');
 

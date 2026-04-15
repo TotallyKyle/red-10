@@ -3,10 +3,14 @@ import type { Card } from '@red10/shared';
 import { useSocket } from './hooks/useSocket.js';
 import Lobby from './components/Lobby.js';
 import GameTable from './components/GameTable.js';
+import DoublingPhase from './components/DoublingPhase.js';
 
 function App() {
   const socket = useSocket();
-  const { gameView, mySocketId, playCards, passAction, defuseAction, chaAction, goChaAction, declineChaAction } = socket;
+  const {
+    gameView, mySocketId, playCards, passAction, defuseAction, chaAction, goChaAction, declineChaAction,
+    declareDouble, skipDoubleAction, declareQuadruple, skipQuadrupleAction,
+  } = socket;
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
   const handleToggleCard = useCallback((card: Card) => {
@@ -73,6 +77,20 @@ function App() {
     declineChaAction();
     setSelectedCards([]);
   }, [declineChaAction]);
+
+  // Doubling phase
+  if (gameView && mySocketId && gameView.phase === 'doubling') {
+    return (
+      <DoublingPhase
+        gameView={gameView}
+        mySocketId={mySocketId}
+        onDeclareDouble={declareDouble}
+        onSkipDouble={skipDoubleAction}
+        onDeclareQuadruple={declareQuadruple}
+        onSkipQuadruple={skipQuadrupleAction}
+      />
+    );
+  }
 
   // Game has started -- show game table
   if (gameView && mySocketId) {

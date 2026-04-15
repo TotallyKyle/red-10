@@ -113,13 +113,147 @@ io.on('connection', (socket) => {
       io.to(p.socketId).emit('game:state', view);
     }
 
-    // Emit round:new event
+    // If we're already in playing phase (no doubling), emit round:new event
     const state = engine.getState();
-    if (state.round) {
+    if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
     }
 
     console.log(`Game started in room ${room.id}`);
+  });
+
+  socket.on('double:declare', (data, cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    const engine = games.get(room.id);
+    if (!engine) {
+      cb({ success: false, error: 'No active game' });
+      return;
+    }
+
+    const result = engine.declareDouble(socket.id, data.bombCards);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
+      return;
+    }
+
+    cb({ success: true });
+
+    const state = engine.getState();
+
+    // Emit double:declared event
+    const doubling = state.doubling;
+    const revealedBomb = doubling?.revealedBombs.find((b) => b.playerId === socket.id);
+    io.to(room.id).emit('double:declared', {
+      playerId: socket.id,
+      revealedCards: revealedBomb?.cards,
+    });
+
+    // Emit team:revealed for all red 10 holders
+    if (doubling?.teamsRevealed) {
+      for (const p of state.players) {
+        if (p.revealedRed10Count > 0) {
+          io.to(room.id).emit('team:revealed', {
+            playerId: p.id,
+            team: p.team!,
+            red10Count: p.revealedRed10Count,
+          });
+        }
+      }
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('double:skip', () => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const engine = games.get(room.id);
+    if (!engine) return;
+
+    const result = engine.skipDouble(socket.id);
+    if (!result.success) return;
+
+    const state = engine.getState();
+
+    // If phase transitioned to playing, emit round:new
+    if (state.phase === 'playing' && state.round) {
+      io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('quadruple:declare', (cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    const engine = games.get(room.id);
+    if (!engine) {
+      cb({ success: false, error: 'No active game' });
+      return;
+    }
+
+    const result = engine.declareQuadruple(socket.id);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
+      return;
+    }
+
+    cb({ success: true });
+
+    const state = engine.getState();
+
+    // If phase transitioned to playing, emit round:new
+    if (state.phase === 'playing' && state.round) {
+      io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('quadruple:skip', () => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const engine = games.get(room.id);
+    if (!engine) return;
+
+    const result = engine.skipQuadruple(socket.id);
+    if (!result.success) return;
+
+    const state = engine.getState();
+
+    // If phase transitioned to playing, emit round:new
+    if (state.phase === 'playing' && state.round) {
+      io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
   });
 
   socket.on('play:cards', (data, cb) => {

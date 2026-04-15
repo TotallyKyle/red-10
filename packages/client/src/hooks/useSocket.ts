@@ -34,6 +34,10 @@ export interface UseSocketReturn {
   chaAction: (cards: Card[]) => void;
   goChaAction: (cards: Card[]) => void;
   declineChaAction: () => void;
+  declareDouble: (bombCards?: Card[]) => void;
+  skipDoubleAction: () => void;
+  declareQuadruple: () => void;
+  skipQuadrupleAction: () => void;
   mySocketId: string | null;
 }
 
@@ -181,6 +185,10 @@ export function useSocket(): UseSocketReturn {
       console.log(`[cha_go:go_cha] ${data.playerId} played go-cha with ${data.cards.length} cards`);
     });
 
+    socket.on('double:declared', (data) => {
+      console.log(`[double:declared] ${data.playerId} doubled${data.revealedCards ? ` (revealed ${data.revealedCards.length} cards)` : ''}`);
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -308,6 +316,40 @@ export function useSocket(): UseSocketReturn {
     socket.emit('cha:decline');
   }, []);
 
+  const declareDouble = useCallback((bombCards?: Card[]) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('double:declare', { bombCards }, (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Double failed');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
+  const skipDoubleAction = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('double:skip');
+  }, []);
+
+  const declareQuadruple = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('quadruple:declare', (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Quadruple failed');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
+  const skipQuadrupleAction = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('quadruple:skip');
+  }, []);
+
   return {
     isConnected,
     roomState,
@@ -323,6 +365,10 @@ export function useSocket(): UseSocketReturn {
     chaAction,
     goChaAction,
     declineChaAction,
+    declareDouble,
+    skipDoubleAction,
+    declareQuadruple,
+    skipQuadrupleAction,
     mySocketId,
   };
 }

@@ -13,6 +13,8 @@ import type {
   SpecialBombType,
   Rank,
   ChaGoState,
+  DoublingState,
+  RevealedBomb,
 } from '@red10/shared';
 import { detectFormat, canBeat, getPlayValue, classifyBomb, rankValue, isRedTen, isBlackTen, isValidDefuse, defuseResultFormat, PLAYER_COUNT, COPIES_PER_RANK } from '@red10/shared';
 import { createDeck, shuffle, deal } from './Deck.js';
@@ -25,6 +27,12 @@ interface PlayerInit {
 
 export class GameEngine {
   private state: GameState;
+  /** Turn order for the doubling phase */
+  private doublingTurnOrder: string[] = [];
+  /** Current index into doublingTurnOrder */
+  private doublingTurnIndex = 0;
+  /** Players who have already skipped quadruple */
+  private quadrupleSkipped: Set<string> = new Set();
 
   constructor(roomId: string, players: PlayerInit[]) {
     const playerStates: PlayerState[] = players.map((p) => ({
@@ -80,12 +88,247 @@ export class GameEngine {
       player.team = hasRed10 ? 'red10' : 'black10';
     }
 
-    // Skip doubling for now, go straight to playing
-    this.state.phase = 'playing';
+    // Enter doubling phase
+    this.state.phase = 'doubling';
 
-    // Start the first round with seat 0 (or previous game winner)
+    // Build doubling turn order starting from previous winner (or seat 0)
+    const starterId = this.state.previousGameWinner ?? this.state.turnOrder[0];
+    const starterIdx = this.state.turnOrder.indexOf(starterId);
+    const doublingOrder: string[] = [];
+    for (let i = 0; i < this.state.turnOrder.length; i++) {
+      doublingOrder.push(this.state.turnOrder[(starterIdx + i) % this.state.turnOrder.length]);
+    }
+    this.doublingTurnOrder = doublingOrder;
+    this.doublingTurnIndex = 0;
+
+    this.state.doubling = {
+      currentBidderId: doublingOrder[0],
+      isDoubled: false,
+      isQuadrupled: false,
+      doublerTeam: null,
+      revealedBombs: [],
+      teamsRevealed: false,
+    };
+  }
+
+  /**
+   * End the doubling phase and transition to playing.
+   */
+  private endDoublingPhase(): void {
+    this.state.phase = 'playing';
+    // Keep doubling state for teamsRevealed / revealedBombs visibility;
+    // clear the currentBidderId since the phase is over.
+    if (this.state.doubling) {
+      this.state.doubling.currentBidderId = '';
+    }
     const leaderId = this.state.previousGameWinner ?? this.state.turnOrder[0];
     this.startNewRound(leaderId);
+  }
+
+  /**
+   * Player declares double during the doubling phase.
+   * bombCards is required for black 10 team members.
+   */
+  declareDouble(playerId: string, bombCards?: Card[]): { success: boolean; error?: string } {
+    if (this.state.phase !== 'doubling' || !this.state.doubling) {
+      return { success: false, error: 'Not in doubling phase' };
+    }
+
+    const doubling = this.state.doubling;
+    if (doubling.isDoubled) {
+      return { success: false, error: 'Already doubled' };
+    }
+
+    if (doubling.currentBidderId !== playerId) {
+      return { success: false, error: 'Not your turn to bid' };
+    }
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player) {
+      return { success: false, error: 'Player not found' };
+    }
+
+    const team = player.team!;
+
+    if (team === 'black10') {
+      // Black 10 team member must reveal a bomb
+      if (!bombCards || bombCards.length === 0) {
+        return { success: false, error: 'Black 10 team member must reveal a bomb to double' };
+      }
+
+      // Validate card ownership using IDs
+      const handIds = new Set(player.hand.map((c) => c.id));
+      for (const card of bombCards) {
+        if (!handIds.has(card.id)) {
+          return { success: false, error: `Card ${card.id} is not in your hand` };
+        }
+      }
+
+      // Use actual cards from hand
+      const bombCardIds = new Set(bombCards.map((c) => c.id));
+      const actualBombCards = player.hand.filter((c) => bombCardIds.has(c.id));
+
+      // Validate the cards form a valid bomb
+      const bombInfo = classifyBomb(actualBombCards);
+      if (!bombInfo) {
+        return { success: false, error: 'Cards do not form a valid bomb' };
+      }
+
+      // Record the revealed bomb
+      doubling.revealedBombs.push({ playerId, cards: actualBombCards });
+    } else {
+      // Red 10 team member: auto-reveal all their red 10s
+      const red10Count = player.hand.filter((c) => isRedTen(c)).length;
+      player.revealedRed10Count = red10Count;
+    }
+
+    // Set doubled state
+    doubling.isDoubled = true;
+    doubling.doublerTeam = team;
+    this.state.stakeMultiplier = 2;
+
+    // Force ALL red 10 holders to reveal their red 10s
+    for (const p of this.state.players) {
+      const red10Count = p.hand.filter((c) => isRedTen(c)).length;
+      if (red10Count > 0) {
+        p.revealedRed10Count = red10Count;
+      }
+    }
+    doubling.teamsRevealed = true;
+
+    // Set up quadruple opportunity for the opposing team
+    const opposingTeam: Team = team === 'red10' ? 'black10' : 'red10';
+    // Find the first opposing team member in doubling turn order
+    const opposingMember = this.doublingTurnOrder.find(
+      (id) => this.state.players.find((p) => p.id === id)?.team === opposingTeam,
+    );
+
+    if (opposingMember) {
+      doubling.currentBidderId = opposingMember;
+    } else {
+      // No opposing team member found (shouldn't happen), end phase
+      this.endDoublingPhase();
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Player skips their doubling turn.
+   */
+  skipDouble(playerId: string): { success: boolean; error?: string } {
+    if (this.state.phase !== 'doubling' || !this.state.doubling) {
+      return { success: false, error: 'Not in doubling phase' };
+    }
+
+    const doubling = this.state.doubling;
+
+    if (doubling.currentBidderId !== playerId) {
+      return { success: false, error: 'Not your turn to bid' };
+    }
+
+    // If we're in the quadruple phase (isDoubled is true), use skipQuadruple logic
+    if (doubling.isDoubled) {
+      return this.skipQuadruple(playerId);
+    }
+
+    // Advance to next player in doubling turn order
+    this.doublingTurnIndex++;
+    if (this.doublingTurnIndex >= this.doublingTurnOrder.length) {
+      // All players have had a chance, nobody doubled
+      this.endDoublingPhase();
+    } else {
+      doubling.currentBidderId = this.doublingTurnOrder[this.doublingTurnIndex];
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Opposing team declares quadruple in response to a double.
+   */
+  declareQuadruple(playerId: string): { success: boolean; error?: string } {
+    if (this.state.phase !== 'doubling' || !this.state.doubling) {
+      return { success: false, error: 'Not in doubling phase' };
+    }
+
+    const doubling = this.state.doubling;
+    if (!doubling.isDoubled) {
+      return { success: false, error: 'No double has been declared' };
+    }
+
+    if (doubling.isQuadrupled) {
+      return { success: false, error: 'Already quadrupled' };
+    }
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player) {
+      return { success: false, error: 'Player not found' };
+    }
+
+    // Must be on the opposing team of the doubler
+    if (player.team === doubling.doublerTeam) {
+      return { success: false, error: 'Only the opposing team can quadruple' };
+    }
+
+    doubling.isQuadrupled = true;
+    this.state.stakeMultiplier = 4;
+
+    // End doubling phase
+    this.endDoublingPhase();
+
+    return { success: true };
+  }
+
+  /**
+   * Opposing team member skips quadruple.
+   */
+  skipQuadruple(playerId: string): { success: boolean; error?: string } {
+    if (this.state.phase !== 'doubling' || !this.state.doubling) {
+      return { success: false, error: 'Not in doubling phase' };
+    }
+
+    const doubling = this.state.doubling;
+    if (!doubling.isDoubled) {
+      return { success: false, error: 'No double has been declared' };
+    }
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player) {
+      return { success: false, error: 'Player not found' };
+    }
+
+    if (player.team === doubling.doublerTeam) {
+      return { success: false, error: 'Only the opposing team can respond to double' };
+    }
+
+    if (doubling.currentBidderId !== playerId) {
+      return { success: false, error: 'Not your turn to bid' };
+    }
+
+    this.quadrupleSkipped.add(playerId);
+
+    // Find next opposing team member in doubling turn order who hasn't skipped
+    const opposingTeam: Team = doubling.doublerTeam === 'red10' ? 'black10' : 'red10';
+    const currentIdx = this.doublingTurnOrder.indexOf(playerId);
+    let found = false;
+
+    for (let i = 1; i < this.doublingTurnOrder.length; i++) {
+      const nextId = this.doublingTurnOrder[(currentIdx + i) % this.doublingTurnOrder.length];
+      const nextPlayer = this.state.players.find((p) => p.id === nextId);
+      if (nextPlayer?.team === opposingTeam && !this.quadrupleSkipped.has(nextId)) {
+        doubling.currentBidderId = nextId;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      // All opposing team members have skipped
+      this.endDoublingPhase();
+    }
+
+    return { success: true };
   }
 
   /**
@@ -498,6 +741,22 @@ export class GameEngine {
    * Determine valid actions for a player.
    */
   getValidActions(playerId: string): ActionType[] {
+    // Handle doubling phase
+    if (this.state.phase === 'doubling' && this.state.doubling) {
+      const doubling = this.state.doubling;
+      if (doubling.currentBidderId !== playerId) return [];
+
+      if (doubling.isDoubled) {
+        // Quadruple phase: opposing team can quadruple or skip
+        const player = this.state.players.find((p) => p.id === playerId);
+        if (!player || player.team === doubling.doublerTeam) return [];
+        return ['quadruple', 'skip_double'];
+      }
+
+      // Normal doubling turn
+      return ['double', 'skip_double'];
+    }
+
     if (this.state.phase !== 'playing') return [];
 
     const round = this.state.round;
@@ -597,6 +856,7 @@ export class GameEngine {
       throw new Error(`Player ${playerId} not found in game ${this.state.id}`);
     }
 
+    const teamsRevealed = this.state.doubling?.teamsRevealed ?? false;
     const playerViews: ClientPlayerView[] = this.state.players.map((p) => ({
       id: p.id,
       name: p.name,
@@ -604,8 +864,8 @@ export class GameEngine {
       handSize: p.handSize,
       isOut: p.isOut,
       finishOrder: p.finishOrder,
-      // Other players' teams are hidden unless revealed (revealedRed10Count > 0)
-      team: p.id === playerId ? p.team : (p.revealedRed10Count > 0 ? p.team : null),
+      // Other players' teams are hidden unless revealed (revealedRed10Count > 0 or teamsRevealed via doubling)
+      team: p.id === playerId ? p.team : (teamsRevealed || p.revealedRed10Count > 0 ? p.team : null),
       revealedRed10Count: p.revealedRed10Count,
       isConnected: p.isConnected,
     }));
@@ -613,9 +873,11 @@ export class GameEngine {
     const myTeam: Team = me.team ?? 'black10';
 
     const isMyTurn =
-      this.state.phase === 'playing' &&
-      this.state.round?.currentPlayerId === playerId &&
-      !me.isOut;
+      (this.state.phase === 'playing' &&
+        this.state.round?.currentPlayerId === playerId &&
+        !me.isOut) ||
+      (this.state.phase === 'doubling' &&
+        this.state.doubling?.currentBidderId === playerId);
 
     const validActions = this.getValidActions(playerId);
 
