@@ -197,6 +197,9 @@ export interface ClientGameView {
   myTeam: Team;
   finishOrder: string[];
   scoringTeam: Team | null;
+  gameResult?: GameResult;
+  /** How many players are ready to play again */
+  playAgainCount?: number;
 }
 
 // ---- Scoring ----

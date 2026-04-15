@@ -1,5 +1,6 @@
 import type {
   GameState,
+  GameResult,
   PlayerState,
   ClientGameView,
   ClientPlayerView,
@@ -18,6 +19,7 @@ import type {
 } from '@red10/shared';
 import { detectFormat, canBeat, getPlayValue, classifyBomb, rankValue, isRedTen, isBlackTen, isValidDefuse, defuseResultFormat, PLAYER_COUNT, COPIES_PER_RANK } from '@red10/shared';
 import { createDeck, shuffle, deal } from './Deck.js';
+import { calculateScore } from './Scoring.js';
 
 interface PlayerInit {
   id: string;
@@ -33,6 +35,10 @@ export class GameEngine {
   private doublingTurnIndex = 0;
   /** Players who have already skipped quadruple */
   private quadrupleSkipped: Set<string> = new Set();
+  /** Calculated game result after game ends */
+  private gameResult: GameResult | null = null;
+  /** Player IDs who want to play again */
+  private playAgainPlayerIds: Set<string> = new Set();
 
   constructor(roomId: string, players: PlayerInit[]) {
     const playerStates: PlayerState[] = players.map((p) => ({
@@ -702,6 +708,7 @@ export class GameEngine {
       }
       this.state.phase = 'game_over';
       this.state.round = null;
+      this.gameResult = calculateScore(this.state);
       return;
     }
 
@@ -732,6 +739,7 @@ export class GameEngine {
         }
         this.state.phase = 'game_over';
         this.state.round = null;
+        this.gameResult = calculateScore(this.state);
         return;
       }
     }
@@ -881,7 +889,7 @@ export class GameEngine {
 
     const validActions = this.getValidActions(playerId);
 
-    return {
+    const view: ClientGameView = {
       gameId: this.state.id,
       phase: this.state.phase,
       myHand: me.hand,
@@ -895,6 +903,16 @@ export class GameEngine {
       finishOrder: this.state.finishOrder,
       scoringTeam: this.state.scoringTeam,
     };
+
+    if (this.gameResult) {
+      view.gameResult = this.gameResult;
+    }
+
+    if (this.state.phase === 'game_over') {
+      view.playAgainCount = this.playAgainPlayerIds.size;
+    }
+
+    return view;
   }
 
   /**
@@ -1332,6 +1350,96 @@ export class GameEngine {
     if (red10Count > 0) {
       player.revealedRed10Count += red10Count;
     }
+  }
+
+  /**
+   * Get the game result (only available after game_over).
+   */
+  getGameResult(): GameResult | null {
+    return this.gameResult;
+  }
+
+  /**
+   * Player wants to play again. Returns whether all players are ready.
+   */
+  playAgain(playerId: string): { allReady: boolean; count: number } {
+    if (this.state.phase !== 'game_over') {
+      return { allReady: false, count: 0 };
+    }
+
+    this.playAgainPlayerIds.add(playerId);
+    const count = this.playAgainPlayerIds.size;
+    const totalPlayers = this.state.players.length;
+
+    if (count >= totalPlayers) {
+      // All players ready — reset for a new game
+      this.resetForNewGame();
+      return { allReady: true, count };
+    }
+
+    return { allReady: false, count };
+  }
+
+  /**
+   * Reset the game state for a new round, keeping the same players.
+   */
+  private resetForNewGame(): void {
+    // Determine who goes first: the winner of the previous game (first in finishOrder)
+    const previousWinner = this.state.finishOrder.length > 0
+      ? this.state.finishOrder[0]
+      : this.state.turnOrder[0];
+
+    // Deal new cards
+    const deck = shuffle(createDeck());
+    const hands = deal(deck);
+
+    // Sort players by seatIndex to assign hands in seat order
+    const sortedPlayers = [...this.state.players].sort((a, b) => a.seatIndex - b.seatIndex);
+
+    for (let i = 0; i < sortedPlayers.length; i++) {
+      const player = this.state.players.find((p) => p.id === sortedPlayers[i].id)!;
+      player.hand = hands[i];
+      player.handSize = hands[i].length;
+      player.isOut = false;
+      player.finishOrder = null;
+      player.revealedRed10Count = 0;
+
+      // Reassign teams based on new red 10 ownership
+      const hasRed10 = player.hand.some((c) => c.rank === '10' && c.isRed);
+      player.team = hasRed10 ? 'red10' : 'black10';
+    }
+
+    // Reset game-level state
+    this.state.finishOrder = [];
+    this.state.scoringTeam = null;
+    this.state.stakeMultiplier = 1;
+    this.state.round = null;
+    this.state.previousGameWinner = previousWinner;
+    this.gameResult = null;
+    this.playAgainPlayerIds.clear();
+    this.quadrupleSkipped.clear();
+
+    // Enter doubling phase
+    this.state.phase = 'doubling';
+
+    // Build doubling turn order starting from previous winner
+    const starterId = previousWinner;
+    const starterIdx = this.state.turnOrder.indexOf(starterId);
+    const doublingOrder: string[] = [];
+    for (let i = 0; i < this.state.turnOrder.length; i++) {
+      doublingOrder.push(this.state.turnOrder[(starterIdx + i) % this.state.turnOrder.length]);
+    }
+    this.doublingTurnOrder = doublingOrder;
+    this.doublingTurnIndex = 0;
+
+    this.state.doubling = {
+      currentBidderId: doublingOrder[0],
+      isDoubled: false,
+      isQuadrupled: false,
+      doublerTeam: null,
+      revealedBombs: [],
+      teamsRevealed: false,
+    };
   }
 
   /**

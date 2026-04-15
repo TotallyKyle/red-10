@@ -316,6 +316,14 @@ io.on('connection', (socket) => {
       });
     }
 
+    // Check if game ended — emit scored event
+    if (state.phase === 'game_over') {
+      const gameResult = engine.getGameResult();
+      if (gameResult) {
+        io.to(room.id).emit('game:scored', gameResult);
+      }
+    }
+
     // Check if cha-go was triggered
     if (state.round?.chaGoState) {
       const cg = state.round.chaGoState;
@@ -478,6 +486,32 @@ io.on('connection', (socket) => {
       // Round was won, new round started
       io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('game:play_again', () => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const engine = games.get(room.id);
+    if (!engine) return;
+
+    const result = engine.playAgain(socket.id);
+
+    if (result.allReady) {
+      // Game has been reset — send new state to all players
+      const state = engine.getState();
+
+      // If we're in the playing phase already (no doubling), emit round:new
+      if (state.phase === 'playing' && state.round) {
+        io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      }
     }
 
     // Broadcast updated game state to all players

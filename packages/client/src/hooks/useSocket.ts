@@ -38,6 +38,7 @@ export interface UseSocketReturn {
   skipDoubleAction: () => void;
   declareQuadruple: () => void;
   skipQuadrupleAction: () => void;
+  playAgain: () => void;
   mySocketId: string | null;
 }
 
@@ -187,6 +188,10 @@ export function useSocket(): UseSocketReturn {
 
     socket.on('double:declared', (data) => {
       console.log(`[double:declared] ${data.playerId} doubled${data.revealedCards ? ` (revealed ${data.revealedCards.length} cards)` : ''}`);
+    });
+
+    socket.on('game:scored', (result) => {
+      console.log(`[game:scored] ${result.scoringTeam} ${result.scoringTeamWon ? 'won' : 'lost'}. Trapped: ${result.trapped.length}`);
     });
 
     return () => {
@@ -350,6 +355,12 @@ export function useSocket(): UseSocketReturn {
     socket.emit('quadruple:skip');
   }, []);
 
+  const playAgain = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('game:play_again');
+  }, []);
+
   return {
     isConnected,
     roomState,
@@ -369,6 +380,7 @@ export function useSocket(): UseSocketReturn {
     skipDoubleAction,
     declareQuadruple,
     skipQuadrupleAction,
+    playAgain,
     mySocketId,
   };
 }

@@ -4,12 +4,13 @@ import { useSocket } from './hooks/useSocket.js';
 import Lobby from './components/Lobby.js';
 import GameTable from './components/GameTable.js';
 import DoublingPhase from './components/DoublingPhase.js';
+import ScoreBoard from './components/ScoreBoard.js';
 
 function App() {
   const socket = useSocket();
   const {
     gameView, mySocketId, playCards, passAction, defuseAction, chaAction, goChaAction, declineChaAction,
-    declareDouble, skipDoubleAction, declareQuadruple, skipQuadrupleAction,
+    declareDouble, skipDoubleAction, declareQuadruple, skipQuadrupleAction, playAgain,
   } = socket;
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
@@ -77,6 +78,17 @@ function App() {
     declineChaAction();
     setSelectedCards([]);
   }, [declineChaAction]);
+
+  // Game over — show scoreboard
+  if (gameView && mySocketId && gameView.phase === 'game_over') {
+    return (
+      <ScoreBoard
+        gameView={gameView}
+        mySocketId={mySocketId}
+        onPlayAgain={playAgain}
+      />
+    );
+  }
 
   // Doubling phase
   if (gameView && mySocketId && gameView.phase === 'doubling') {
