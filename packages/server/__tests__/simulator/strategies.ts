@@ -40,40 +40,69 @@ function groupByRank(hand: Card[]): Map<string, Card[]> {
   return groups;
 }
 
+/**
+ * Get the set of ranks that form bombs in this hand (3+ of same rank).
+ * These ranks should be preserved — don't break them into singles/pairs.
+ */
+export function getBombRanks(hand: Card[]): Set<string> {
+  const groups = groupByRank(hand);
+  const bombRanks = new Set<string>();
+  for (const [rank, cards] of groups) {
+    if (cards.length >= 3) bombRanks.add(rank);
+  }
+  // Also protect pairs of 4s if we have aces (fours+aces bomb)
+  const fours = groups.get('4');
+  const aces = groups.get('A');
+  if (fours && fours.length >= 2 && aces && aces.length >= 1) {
+    bombRanks.add('4');
+    bombRanks.add('A');
+  }
+  return bombRanks;
+}
+
 /** Find all valid single cards that can beat the current play */
-export function findValidSingles(hand: Card[], lastPlay: Play | null): Card[][] {
+export function findValidSingles(hand: Card[], lastPlay: Play | null, preserveBombs = false): Card[][] {
+  const bombRanks = preserveBombs ? getBombRanks(hand) : new Set<string>();
+  const candidates = preserveBombs ? hand.filter(c => !bombRanks.has(c.rank)) : hand;
+
   if (lastPlay === null) {
-    // Opening: any single
-    return hand.map(c => [c]);
+    const results = candidates.map(c => [c]);
+    // If preserving bombs left us with nothing, fall back to all cards
+    return results.length > 0 ? results : hand.map(c => [c]);
   }
   const results: Card[][] = [];
-  for (const c of hand) {
+  for (const c of candidates) {
     if (canBeat([c], lastPlay)) {
       results.push([c]);
     }
+  }
+  // Fallback: if we filtered out everything, try without preservation
+  if (results.length === 0 && preserveBombs) {
+    return findValidSingles(hand, lastPlay, false);
   }
   return results;
 }
 
 /** Find all valid pairs that can beat the current play */
-export function findValidPairs(hand: Card[], lastPlay: Play | null): Card[][] {
+export function findValidPairs(hand: Card[], lastPlay: Play | null, preserveBombs = false): Card[][] {
   const groups = groupByRank(hand);
+  const bombRanks = preserveBombs ? getBombRanks(hand) : new Set<string>();
   const results: Card[][] = [];
-  for (const [, cards] of groups) {
+  for (const [rank, cards] of groups) {
+    // Skip bomb ranks to preserve them (unless they have more than 3, in which case
+    // we can spare a pair and still keep a 3-card bomb)
+    if (preserveBombs && bombRanks.has(rank) && cards.length < 5) continue;
+
     if (cards.length >= 2) {
-      // Generate all 2-card combos of the same rank
-      for (let i = 0; i < cards.length; i++) {
-        for (let j = i + 1; j < cards.length; j++) {
-          const pair = [cards[i], cards[j]];
-          if (lastPlay === null || canBeat(pair, lastPlay)) {
-            results.push(pair);
-            // One pair per rank is enough for strategy purposes
-            break;
-          }
-        }
-        if (results.length > 0 && results[results.length - 1][0].rank === cards[0].rank) break;
+      const pair = [cards[0], cards[1]];
+      if (lastPlay === null || canBeat(pair, lastPlay)) {
+        results.push(pair);
       }
     }
+  }
+  // Fallback
+  if (results.length === 0 && preserveBombs) {
+    return findValidPairs(hand, lastPlay, false);
   }
   return results;
 }
@@ -239,15 +268,17 @@ export function findOpeningPlays(hand: Card[]): Card[][] {
   return results;
 }
 
-/** Find all plays that can beat the current play */
-function findBeatingPlays(hand: Card[], lastPlay: Play): Card[][] {
+/** Find all plays that can beat the current play.
+ * If preserveBombs is true, avoid breaking apart bomb ranks for singles/pairs.
+ */
+function findBeatingPlays(hand: Card[], lastPlay: Play, preserveBombs = false): Card[][] {
   const results: Card[][] = [];
   const format = lastPlay.format;
 
   if (format === 'single') {
-    results.push(...findValidSingles(hand, lastPlay));
+    results.push(...findValidSingles(hand, lastPlay, preserveBombs));
   } else if (format === 'pair') {
-    results.push(...findValidPairs(hand, lastPlay));
+    results.push(...findValidPairs(hand, lastPlay, preserveBombs));
   } else if (format === 'straight') {
     results.push(...findValidStraights(hand, lastPlay));
   } else if (format === 'paired_straight') {
@@ -416,12 +447,14 @@ export const AggressiveStrategy: PlayerStrategy = {
       }
     }
 
-    // Always cha if possible
+    // Cha: only if it doesn't break a bomb (3+ of trigger rank = bomb, don't cha with 2)
     if (validActions.includes('cha') && round?.chaGoState) {
       const triggerCards = player.hand.filter(c => c.rank === round.chaGoState!.triggerRank);
-      if (triggerCards.length >= 2) {
+      // Only cha if we have 4+ (preserving at least a 2-card leftover) or exactly 2 (no bomb to break)
+      if (triggerCards.length === 2 || triggerCards.length >= 4) {
         return { action: 'cha', cards: triggerCards.slice(0, 2) };
       }
+      // If we have exactly 3, cha would break our bomb — decline
     }
 
     if (validActions.includes('decline_cha')) {
@@ -442,22 +475,22 @@ export const AggressiveStrategy: PlayerStrategy = {
       return { action: 'pass' };
     }
 
-    // Leader must play
+    // Leader must play — prefer non-bomb cards
     if (round && round.currentFormat === null && round.leaderId === playerId) {
-      const openingPlays = findOpeningPlays(player.hand);
-      // Play the lowest card/combo
-      if (openingPlays.length > 0) {
-        openingPlays.sort((a, b) => {
-          const aVal = Math.min(...a.map(c => rankValue(c.rank)));
-          const bVal = Math.min(...b.map(c => rankValue(c.rank)));
-          return aVal - bVal;
-        });
-        return { action: 'play', cards: openingPlays[0] };
+      const bombRanks = getBombRanks(player.hand);
+      const nonBombCards = player.hand.filter(c => !bombRanks.has(c.rank));
+
+      if (nonBombCards.length > 0) {
+        // Play lowest non-bomb single
+        nonBombCards.sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
+        return { action: 'play', cards: [nonBombCards[0]] };
       }
-      return { action: 'play', cards: [player.hand[0]] };
+      // All cards are bomb material — play lowest single anyway
+      const sorted = [...player.hand].sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
+      return { action: 'play', cards: [sorted[0]] };
     }
 
-    // Following: always play if possible, play lowest valid
+    // Following: always play if possible, play lowest valid, preserve bombs
     if (round?.lastPlay) {
       // During waiting_go
       if (round.chaGoState?.phase === 'waiting_go') {
@@ -468,7 +501,7 @@ export const AggressiveStrategy: PlayerStrategy = {
         return { action: 'pass' };
       }
 
-      const beatingPlays = findBeatingPlays(player.hand, round.lastPlay);
+      const beatingPlays = findBeatingPlays(player.hand, round.lastPlay, true);
       if (beatingPlays.length > 0) {
         // Play the lowest valid combo (save high cards)
         beatingPlays.sort((a, b) => {
@@ -534,11 +567,14 @@ export const BomberStrategy: PlayerStrategy = {
       }
     }
 
+    // Bomber: NEVER cha if it would break a bomb (3+ of that rank)
     if (validActions.includes('cha') && round?.chaGoState) {
       const triggerCards = player.hand.filter(c => c.rank === round.chaGoState!.triggerRank);
-      if (triggerCards.length >= 2) {
+      // Only cha if we have exactly 2 (no bomb) or 5+ (can spare a pair and keep a bomb)
+      if (triggerCards.length === 2 || triggerCards.length >= 5) {
         return { action: 'cha', cards: triggerCards.slice(0, 2) };
       }
+      // Otherwise decline — protect the bomb
     }
 
     if (validActions.includes('decline_cha')) {
@@ -651,7 +687,7 @@ export const ChaGoHunterStrategy: PlayerStrategy = {
       }
     }
 
-    // Always cha if possible
+    // ChaGoHunter: ALWAYS cha — intentionally breaks bombs to test cha-go paths
     if (validActions.includes('cha') && round?.chaGoState) {
       const triggerCards = player.hand.filter(c => c.rank === round.chaGoState!.triggerRank);
       if (triggerCards.length >= 2) {
@@ -676,11 +712,16 @@ export const ChaGoHunterStrategy: PlayerStrategy = {
       return { action: 'pass' };
     }
 
-    // Leader: play singles preferentially to trigger cha-go
+    // Leader: play singles preferentially to trigger cha-go, but preserve bombs
     if (round && round.currentFormat === null && round.leaderId === playerId) {
-      // Pick singles — prefer ranks where we know others might have pairs
-      player.hand.sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
-      return { action: 'play', cards: [player.hand[0]] };
+      const bombRanks = getBombRanks(player.hand);
+      const nonBombCards = player.hand.filter(c => !bombRanks.has(c.rank));
+      if (nonBombCards.length > 0) {
+        nonBombCards.sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
+        return { action: 'play', cards: [nonBombCards[0]] };
+      }
+      const sorted = [...player.hand].sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
+      return { action: 'play', cards: [sorted[0]] };
     }
 
     // Following
@@ -693,16 +734,16 @@ export const ChaGoHunterStrategy: PlayerStrategy = {
         return { action: 'pass' };
       }
 
-      // Try to play singles to trigger cha-go
+      // Try to play singles to trigger cha-go, but preserve bomb ranks
       if (round.lastPlay.format === 'single') {
-        const singles = findValidSingles(player.hand, round.lastPlay);
+        const singles = findValidSingles(player.hand, round.lastPlay, true);
         if (singles.length > 0) {
           singles.sort((a, b) => rankValue(a[0].rank) - rankValue(b[0].rank));
           return { action: 'play', cards: singles[0] };
         }
       }
 
-      const beatingPlays = findBeatingPlays(player.hand, round.lastPlay);
+      const beatingPlays = findBeatingPlays(player.hand, round.lastPlay, true);
       if (beatingPlays.length > 0) {
         beatingPlays.sort((a, b) => {
           const aVal = Math.min(...a.map(c => rankValue(c.rank)));
@@ -714,6 +755,12 @@ export const ChaGoHunterStrategy: PlayerStrategy = {
     }
 
     if (round && round.currentFormat === null) {
+      const bombRanks = getBombRanks(player.hand);
+      const nonBomb = player.hand.filter(c => !bombRanks.has(c.rank));
+      if (nonBomb.length > 0) {
+        nonBomb.sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
+        return { action: 'play', cards: [nonBomb[0]] };
+      }
       return { action: 'play', cards: [player.hand[0]] };
     }
 
