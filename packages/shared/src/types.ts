@@ -237,6 +237,13 @@ export interface ServerToClientEvents {
   'room:player_ready': (data: { playerId: string }) => void;
   'room:host_changed': (data: { hostId: string }) => void;
   'error': (data: { message: string; code: string }) => void;
+  'game:log_entry': (entry: GameLogEntryData) => void;
+}
+
+export interface GameLogEntryData {
+  actor: string;
+  detail: string;
+  handSizes: Record<string, number>;
 }
 
 export interface ClientToServerEvents {
@@ -244,6 +251,7 @@ export interface ClientToServerEvents {
   'room:join': (data: { roomId: string; playerName: string }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'room:ready': () => void;
   'room:start': () => void;
+  'room:fill_bots': (cb: (res: { success: boolean; error?: string }) => void) => void;
   'double:declare': (data: { bombCards?: Card[] }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'double:skip': () => void;
   'quadruple:declare': (cb: (res: { success: boolean; error?: string }) => void) => void;
@@ -256,4 +264,5 @@ export interface ClientToServerEvents {
   'cha:decline': () => void;
   'game:play_again': () => void;
   'room:rejoin': (data: { roomId: string; playerName: string }, cb: (res: { success: boolean; error?: string }) => void) => void;
+  'game:get_log': (cb: (res: { log: string }) => void) => void;
 }

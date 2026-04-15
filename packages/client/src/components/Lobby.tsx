@@ -7,7 +7,7 @@ interface LobbyProps {
 }
 
 function Lobby({ socket }: LobbyProps) {
-  const { isConnected, roomState, errorMessage, createRoom, joinRoom, toggleReady, startGame, mySocketId } = socket;
+  const { isConnected, roomState, errorMessage, createRoom, joinRoom, toggleReady, startGame, fillWithBots, mySocketId } = socket;
 
   const [nameInput, setNameInput] = useState('');
   const [roomCodeInput, setRoomCodeInput] = useState('');
@@ -72,6 +72,7 @@ function Lobby({ socket }: LobbyProps) {
                       </div>
                       <div>
                         <span className="text-white font-medium text-sm">
+                          {p.id.startsWith('bot-') && <span className="mr-1" title="Bot">{'\u{1F916}'}</span>}
                           {p.name}
                         </span>
                         {p.id === mySocketId && (
@@ -121,6 +122,15 @@ function Lobby({ socket }: LobbyProps) {
               >
                 {amReady ? 'Cancel Ready' : 'Ready Up'}
               </button>
+
+              {isHost && connectedPlayers.length < PLAYER_COUNT && (
+                <button
+                  onClick={fillWithBots}
+                  className="w-full py-3.5 rounded-xl font-bold text-base transition-all duration-200 bg-blue-600/40 border border-blue-500/30 text-blue-300 hover:bg-blue-500/40 hover:border-blue-400/40"
+                >
+                  {'\u{1F916}'} Fill with Bots ({PLAYER_COUNT - connectedPlayers.length} needed)
+                </button>
+              )}
 
               {isHost && (
                 <button

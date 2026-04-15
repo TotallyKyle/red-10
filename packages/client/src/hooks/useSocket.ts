@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { ServerToClientEvents, ClientToServerEvents, ClientGameView, Card, PlayFormat, Rank, Team } from '@red10/shared';
+import type { ServerToClientEvents, ClientToServerEvents, ClientGameView, Card, PlayFormat, Rank, Team, GameLogEntryData } from '@red10/shared';
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -36,6 +36,7 @@ export interface UseSocketReturn {
   joinRoom: (roomId: string, name: string) => void;
   toggleReady: () => void;
   startGame: () => void;
+  fillWithBots: () => void;
   playCards: (cards: Card[]) => void;
   passAction: () => void;
   defuseAction: (cards: Card[]) => void;
@@ -47,6 +48,8 @@ export interface UseSocketReturn {
   declareQuadruple: () => void;
   skipQuadrupleAction: () => void;
   playAgain: () => void;
+  getGameLog: () => void;
+  gameLogText: string | null;
   mySocketId: string | null;
   turnStartTime: number | null;
 }
@@ -79,6 +82,7 @@ export function useSocket(): UseSocketReturn {
   const [mySocketId, setMySocketId] = useState<string | null>(null);
   const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
+  const [gameLogText, setGameLogText] = useState<string | null>(null);
 
   // Track players and ready states locally since server sends incremental events
   const playersRef = useRef<RoomPlayer[]>([]);
@@ -287,6 +291,12 @@ export function useSocket(): UseSocketReturn {
       setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'game_scored', message: msg }]);
     });
 
+    socket.on('game:log_entry', (entry: GameLogEntryData) => {
+      // Server-side log entries are also appended to local log
+      // We already get client-side events, so only add if it contains new info (e.g., from bots)
+      // Skip duplicates by not adding — the client-side events handle human actions
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -358,6 +368,25 @@ export function useSocket(): UseSocketReturn {
     const socket = socketRef.current;
     if (!socket) return;
     socket.emit('room:start');
+  }, []);
+
+  const fillWithBots = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('room:fill_bots', (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Failed to fill with bots');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
+  const getGameLog = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('game:get_log', (res) => {
+      setGameLogText(res.log);
+    });
   }, []);
 
   const playCards = useCallback((cards: Card[]) => {
@@ -466,6 +495,7 @@ export function useSocket(): UseSocketReturn {
     joinRoom,
     toggleReady,
     startGame,
+    fillWithBots,
     playCards,
     passAction,
     defuseAction,
@@ -477,6 +507,8 @@ export function useSocket(): UseSocketReturn {
     declareQuadruple,
     skipQuadrupleAction,
     playAgain,
+    getGameLog,
+    gameLogText,
     mySocketId,
     turnStartTime,
   };

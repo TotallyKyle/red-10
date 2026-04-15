@@ -12,8 +12,12 @@ import {
   findDisconnectedPlayer,
   getPlayerList,
   getRoomForSocket,
+  addBotToRoom,
 } from './lobby.js';
+import type { Room } from './lobby.js';
 import { GameEngine } from './game/GameEngine.js';
+import { BotManager } from './bot/BotManager.js';
+import { GameLogger } from './bot/GameLogger.js';
 
 /** Active game engines, keyed by roomId */
 const games = new Map<string, GameEngine>();
@@ -21,10 +25,42 @@ const games = new Map<string, GameEngine>();
 /** Active turn timers, keyed by roomId. Stores cleanup function. */
 const turnTimers = new Map<string, () => void>();
 
+/** Bot manager singleton */
+const botManager = new BotManager();
+
+/** Game loggers, keyed by roomId */
+const gameLoggers = new Map<string, GameLogger>();
+
+/** Active bot action timers so we can clean them up */
+const botTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+
 const TURN_TIMEOUT_MS = 30_000;
+const BOT_ACTION_DELAY = 500;
+const BOT_CHA_DELAY = 300;
+
+/** Broadcast game state to all human players in the room (skips bots). */
+function broadcastState(roomId: string, room: Room, engine: GameEngine) {
+  for (const p of room.players.values()) {
+    if (!botManager.isBot(p.socketId)) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  }
+}
+
+/** Broadcast a game log entry to all human players. */
+function broadcastLogEntry(roomId: string, room: Room, logger: GameLogger) {
+  const entry = logger.getLastEntryForBroadcast();
+  if (!entry) return;
+  for (const p of room.players.values()) {
+    if (!botManager.isBot(p.socketId)) {
+      io.to(p.socketId).emit('game:log_entry', entry);
+    }
+  }
+}
 
 /** Set up turn timer for the current player. Clears any previous timer for this room. */
-function setupTurnTimer(roomId: string, room: { players: Map<string, { socketId: string }> }) {
+function setupTurnTimer(roomId: string, room: Room) {
   // Clear existing timer
   const existingCleanup = turnTimers.get(roomId);
   if (existingCleanup) existingCleanup();
@@ -33,21 +69,36 @@ function setupTurnTimer(roomId: string, room: { players: Map<string, { socketId:
   const engine = games.get(roomId);
   if (!engine) return;
 
+  // Don't set turn timers for bots — they handle themselves
+  const state = engine.getState();
+  if (state.phase === 'playing' && state.round) {
+    if (botManager.isBot(state.round.currentPlayerId)) return;
+  }
+
   const cleanup = engine.setupTurnTimer(TURN_TIMEOUT_MS, (playerId) => {
     // Auto-pass happened
     io.to(roomId).emit('player:passed', { playerId });
 
-    const state = engine.getState();
-    if (state.round && state.round.plays.length === 0) {
-      io.to(roomId).emit('round:won', { winnerId: state.round.leaderId });
-      io.to(roomId).emit('round:new', { leaderId: state.round.leaderId });
+    const logger = gameLoggers.get(roomId);
+    if (logger) {
+      logger.logAction(engine, playerId, 'pass');
+      broadcastLogEntry(roomId, room, logger);
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    const st = engine.getState();
+    if (st.round && st.round.plays.length === 0) {
+      io.to(roomId).emit('round:won', { winnerId: st.round.leaderId });
+      io.to(roomId).emit('round:new', { leaderId: st.round.leaderId });
+      if (logger) {
+        logger.logRoundEnd(engine, st.round.leaderId);
+        logger.logRoundStart(engine, st.round.leaderId);
+      }
     }
+
+    broadcastState(roomId, room, engine);
+
+    // Check if next player is a bot
+    scheduleBotAction(roomId);
 
     // Set up next turn timer
     setupTurnTimer(roomId, room);
@@ -64,6 +115,348 @@ function clearTurnTimer(roomId: string) {
   if (cleanup) cleanup();
   turnTimers.delete(roomId);
 }
+
+/** Clear all bot timers for a room */
+function clearBotTimers(roomId: string) {
+  const timers = botTimers.get(roomId);
+  if (timers) {
+    for (const t of timers) clearTimeout(t);
+  }
+  botTimers.delete(roomId);
+}
+
+function addBotTimer(roomId: string, timer: ReturnType<typeof setTimeout>) {
+  let timers = botTimers.get(roomId);
+  if (!timers) {
+    timers = [];
+    botTimers.set(roomId, timers);
+  }
+  timers.push(timer);
+}
+
+/**
+ * Execute a bot action on the game engine and broadcast results.
+ * This mirrors the human socket handlers but runs server-side.
+ */
+function executeBotAction(roomId: string, botId: string, engine: GameEngine, room: Room): void {
+  const action = botManager.processBotTurn(roomId, botId, engine);
+  if (!action) return;
+
+  const logger = gameLoggers.get(roomId);
+  const state = engine.getState();
+
+  // ---- Doubling phase actions ----
+  if (state.phase === 'doubling') {
+    switch (action.action) {
+      case 'double': {
+        const result = engine.declareDouble(botId, action.bombCards);
+        if (!result.success) break;
+        const st = engine.getState();
+        const doubling = st.doubling;
+        const revealedBomb = doubling?.revealedBombs.find((b) => b.playerId === botId);
+        io.to(roomId).emit('double:declared', {
+          playerId: botId,
+          revealedCards: revealedBomb?.cards,
+        });
+        if (doubling?.teamsRevealed) {
+          for (const p of st.players) {
+            if (p.revealedRed10Count > 0) {
+              io.to(roomId).emit('team:revealed', {
+                playerId: p.id,
+                team: p.team!,
+                red10Count: p.revealedRed10Count,
+              });
+            }
+          }
+        }
+        if (logger) {
+          logger.logDoubling(engine, botId, 'double', revealedBomb?.cards);
+          broadcastLogEntry(roomId, room, logger);
+        }
+        break;
+      }
+      case 'skip': {
+        const result = engine.skipDouble(botId);
+        if (!result.success) break;
+        if (logger) {
+          logger.logDoubling(engine, botId, 'skip');
+          broadcastLogEntry(roomId, room, logger);
+        }
+        break;
+      }
+      case 'quadruple': {
+        const result = engine.declareQuadruple(botId);
+        if (!result.success) break;
+        if (logger) {
+          logger.logDoubling(engine, botId, 'quadruple');
+          broadcastLogEntry(roomId, room, logger);
+        }
+        break;
+      }
+      case 'skip_quadruple': {
+        const result = engine.skipQuadruple(botId);
+        if (!result.success) break;
+        if (logger) {
+          logger.logDoubling(engine, botId, 'skip_quadruple');
+          broadcastLogEntry(roomId, room, logger);
+        }
+        break;
+      }
+    }
+
+    const postState = engine.getState();
+    if (postState.phase === 'playing' && postState.round) {
+      io.to(roomId).emit('round:new', { leaderId: postState.round.leaderId });
+      if (logger) logger.logRoundStart(engine, postState.round.leaderId);
+      setupTurnTimer(roomId, room);
+    }
+
+    broadcastState(roomId, room, engine);
+    scheduleBotAction(roomId);
+    return;
+  }
+
+  // ---- Playing phase actions ----
+  switch (action.action) {
+    case 'play': {
+      const result = engine.playCards(botId, action.cards);
+      if (!result.success) break;
+
+      const st = engine.getState();
+      const format = st.round?.plays?.[st.round.plays.length - 1]?.format
+        ?? st.round?.currentFormat ?? 'single';
+
+      io.to(roomId).emit('play:made', { playerId: botId, cards: action.cards, format });
+
+      if (logger) {
+        logger.logAction(engine, botId, 'play', action.cards);
+        broadcastLogEntry(roomId, room, logger);
+      }
+
+      // Check red 10s
+      const playedRed10s = action.cards.filter(c => c.rank === '10' && c.isRed);
+      if (playedRed10s.length > 0) {
+        const ps = st.players.find(p => p.id === botId);
+        if (ps) {
+          io.to(roomId).emit('team:revealed', {
+            playerId: botId,
+            team: ps.team!,
+            red10Count: ps.revealedRed10Count,
+          });
+        }
+      }
+
+      // Player out
+      const player = st.players.find(p => p.id === botId);
+      if (player?.isOut && player.finishOrder !== null) {
+        io.to(roomId).emit('player:out', { playerId: botId, finishOrder: player.finishOrder });
+      }
+
+      // Game over
+      if (st.phase === 'game_over') {
+        const gameResult = engine.getGameResult();
+        if (gameResult) io.to(roomId).emit('game:scored', gameResult);
+        if (logger) {
+          logger.logGameEnd(engine);
+          broadcastLogEntry(roomId, room, logger);
+        }
+        clearTurnTimer(roomId);
+        broadcastState(roomId, room, engine);
+        return;
+      }
+
+      // Cha-go triggered
+      if (st.round?.chaGoState) {
+        const cg = st.round.chaGoState;
+        for (const eligibleId of cg.eligiblePlayerIds) {
+          if (!botManager.isBot(eligibleId)) {
+            io.to(eligibleId).emit('cha_go:opportunity', {
+              rank: cg.triggerRank,
+              timeoutMs: 10000,
+            });
+          }
+        }
+      }
+
+      // New round
+      if (st.round && st.round.plays.length === 0) {
+        io.to(roomId).emit('round:won', { winnerId: st.round.leaderId });
+        io.to(roomId).emit('round:new', { leaderId: st.round.leaderId });
+        if (logger) {
+          logger.logRoundEnd(engine, st.round.leaderId);
+          logger.logRoundStart(engine, st.round.leaderId);
+        }
+      }
+
+      setupTurnTimer(roomId, room);
+      break;
+    }
+
+    case 'pass': {
+      const result = engine.pass(botId);
+      if (!result.success) break;
+
+      io.to(roomId).emit('player:passed', { playerId: botId });
+
+      if (logger) {
+        logger.logAction(engine, botId, 'pass');
+        broadcastLogEntry(roomId, room, logger);
+      }
+
+      const st = engine.getState();
+      if (st.round && st.round.plays.length === 0) {
+        io.to(roomId).emit('round:won', { winnerId: st.round.leaderId });
+        io.to(roomId).emit('round:new', { leaderId: st.round.leaderId });
+        if (logger) {
+          logger.logRoundEnd(engine, st.round.leaderId);
+          logger.logRoundStart(engine, st.round.leaderId);
+        }
+      }
+
+      setupTurnTimer(roomId, room);
+      break;
+    }
+
+    case 'cha': {
+      const result = engine.cha(botId, action.cards);
+      if (!result.success) break;
+
+      const st = engine.getState();
+      const triggerRank = st.round?.chaGoState?.triggerRank
+        ?? st.round?.plays?.[st.round.plays.length - 1]?.cards?.[0]?.rank;
+      if (triggerRank) {
+        io.to(roomId).emit('cha_go:started', { rank: triggerRank as any, chaPlayerId: botId });
+      }
+
+      if (logger) {
+        logger.logAction(engine, botId, 'cha', action.cards);
+        broadcastLogEntry(roomId, room, logger);
+      }
+      break;
+    }
+
+    case 'go_cha': {
+      const result = engine.goCha(botId, action.cards);
+      if (!result.success) break;
+
+      io.to(roomId).emit('cha_go:go_cha', { playerId: botId, cards: action.cards });
+
+      if (logger) {
+        logger.logAction(engine, botId, 'go_cha', action.cards);
+        broadcastLogEntry(roomId, room, logger);
+      }
+      break;
+    }
+
+    case 'decline_cha': {
+      const result = engine.declineCha(botId);
+      if (!result.success) break;
+
+      if (logger) {
+        logger.logAction(engine, botId, 'decline_cha');
+        broadcastLogEntry(roomId, room, logger);
+      }
+      break;
+    }
+
+    case 'defuse': {
+      const result = engine.defuse(botId, action.cards);
+      if (!result.success) break;
+
+      io.to(roomId).emit('bomb:defused', { defuserId: botId, cards: action.cards });
+
+      if (logger) {
+        logger.logAction(engine, botId, 'defuse', action.cards);
+        broadcastLogEntry(roomId, room, logger);
+      }
+      break;
+    }
+  }
+
+  broadcastState(roomId, room, engine);
+  scheduleBotAction(roomId);
+}
+
+/**
+ * Schedule a bot action if the current player (or eligible cha-go bots) is a bot.
+ */
+function scheduleBotAction(roomId: string): void {
+  const engine = games.get(roomId);
+  const room = getRoomForSocket_byRoomId(roomId);
+  if (!engine || !room) return;
+
+  const state = engine.getState();
+  if (state.phase === 'game_over') return;
+
+  // ---- Doubling phase ----
+  if (state.phase === 'doubling' && state.doubling) {
+    const bidderId = state.doubling.currentBidderId;
+    if (bidderId && botManager.isBot(bidderId)) {
+      const timer = setTimeout(() => {
+        executeBotAction(roomId, bidderId, engine, room);
+      }, BOT_ACTION_DELAY);
+      addBotTimer(roomId, timer);
+    }
+    return;
+  }
+
+  // ---- Playing phase ----
+  if (state.phase !== 'playing' || !state.round) return;
+
+  // Handle cha-go: all eligible bots should respond
+  if (state.round.chaGoState) {
+    const cg = state.round.chaGoState;
+    if (cg.phase === 'waiting_cha' || cg.phase === 'waiting_final_cha') {
+      // Find eligible bots that haven't declined
+      const eligibleBots = cg.eligiblePlayerIds.filter(
+        id => botManager.isBot(id) && !cg.declinedPlayerIds.includes(id)
+      );
+      let delay = BOT_CHA_DELAY;
+      for (const botId of eligibleBots) {
+        const timer = setTimeout(() => {
+          // Re-check state before acting
+          const currentState = engine.getState();
+          if (currentState.phase !== 'playing') return;
+          if (!currentState.round?.chaGoState) return;
+          const currentCg = currentState.round.chaGoState;
+          if (!currentCg.eligiblePlayerIds.includes(botId)) return;
+          if (currentCg.declinedPlayerIds.includes(botId)) return;
+          executeBotAction(roomId, botId, engine, room);
+        }, delay);
+        addBotTimer(roomId, timer);
+        delay += BOT_CHA_DELAY;
+      }
+      return;
+    }
+
+    // waiting_go: current player is a bot
+    if (cg.phase === 'waiting_go' && botManager.isBot(state.round.currentPlayerId)) {
+      const timer = setTimeout(() => {
+        executeBotAction(roomId, state.round!.currentPlayerId, engine, room);
+      }, BOT_ACTION_DELAY);
+      addBotTimer(roomId, timer);
+      return;
+    }
+  }
+
+  // Normal turn: current player is a bot
+  const currentPlayerId = state.round.currentPlayerId;
+  if (botManager.isBot(currentPlayerId)) {
+    const timer = setTimeout(() => {
+      executeBotAction(roomId, currentPlayerId, engine, room);
+    }, BOT_ACTION_DELAY);
+    addBotTimer(roomId, timer);
+  }
+}
+
+/** Helper to get a room by roomId (not socketId). We need getRoom from lobby. */
+function getRoomForSocket_byRoomId(roomId: string): Room | undefined {
+  // We import getRoom from lobby
+  return getRoom(roomId);
+}
+
+// Need to import getRoom separately
+import { getRoom } from './lobby.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -171,6 +564,55 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('room:player_ready', { playerId: player.socketId });
   });
 
+  // ---- Fill with Bots ----
+  socket.on('room:fill_bots', (cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    if (room.hostId !== socket.id) {
+      cb({ success: false, error: 'Only the host can fill with bots' });
+      return;
+    }
+
+    if (room.gameStarted) {
+      cb({ success: false, error: 'Game already started' });
+      return;
+    }
+
+    const currentCount = [...room.players.values()].filter(p => p.isConnected).length;
+    if (currentCount >= 6) {
+      cb({ success: false, error: 'Room is already full' });
+      return;
+    }
+
+    const bots = botManager.fillWithBots(room.id, currentCount);
+    if (bots.length === 0) {
+      cb({ success: false, error: 'No bots needed' });
+      return;
+    }
+
+    // Add each bot to the lobby room
+    for (const bot of bots) {
+      const lobbyPlayer = addBotToRoom(room.id, bot.id, bot.name);
+      if (lobbyPlayer) {
+        bot.seatIndex = lobbyPlayer.seatIndex;
+        // Broadcast bot join to all human players
+        io.to(room.id).emit('room:player_joined', {
+          player: { id: bot.id, name: bot.name },
+          hostId: room.hostId,
+        });
+        // Broadcast bot ready
+        io.to(room.id).emit('room:player_ready', { playerId: bot.id });
+      }
+    }
+
+    console.log(`Filled room ${room.id} with ${bots.length} bots`);
+    cb({ success: true });
+  });
+
   socket.on('room:start', () => {
     const result = startGame(socket.id);
     if (!result.success) {
@@ -189,20 +631,25 @@ io.on('connection', (socket) => {
     engine.startGame();
     games.set(room.id, engine);
 
-    // Send personalized game state to each player
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
-    }
+    // Create a game logger
+    const logger = new GameLogger();
+    gameLoggers.set(room.id, logger);
+
+    // Send personalized game state to each human player
+    broadcastState(room.id, room, engine);
 
     // If we're already in playing phase (no doubling), emit round:new event
     const state = engine.getState();
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      logger.logRoundStart(engine, state.round.leaderId);
       setupTurnTimer(room.id, room);
     }
 
     console.log(`Game started in room ${room.id}`);
+
+    // Schedule bot action if the first player is a bot
+    scheduleBotAction(room.id);
   });
 
   socket.on('double:declare', (data, cb) => {
@@ -249,11 +696,18 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    // Log
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logDoubling(engine, socket.id, 'double', revealedBomb?.cards);
+      broadcastLogEntry(room.id, room, logger);
     }
+
+    // Broadcast updated game state to all human players
+    broadcastState(room.id, room, engine);
+
+    // Schedule bot action if next bidder is a bot
+    scheduleBotAction(room.id);
   });
 
   socket.on('double:skip', () => {
@@ -266,19 +720,23 @@ io.on('connection', (socket) => {
     const result = engine.skipDouble(socket.id);
     if (!result.success) return;
 
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logDoubling(engine, socket.id, 'skip');
+      broadcastLogEntry(room.id, room, logger);
+    }
+
     const state = engine.getState();
 
     // If phase transitioned to playing, emit round:new
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      if (logger) logger.logRoundStart(engine, state.round.leaderId);
       setupTurnTimer(room.id, room);
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
-    }
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('quadruple:declare', (cb) => {
@@ -302,19 +760,23 @@ io.on('connection', (socket) => {
 
     cb({ success: true });
 
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logDoubling(engine, socket.id, 'quadruple');
+      broadcastLogEntry(room.id, room, logger);
+    }
+
     const state = engine.getState();
 
     // If phase transitioned to playing, emit round:new
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      if (logger) logger.logRoundStart(engine, state.round.leaderId);
       setupTurnTimer(room.id, room);
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
-    }
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('quadruple:skip', () => {
@@ -327,19 +789,23 @@ io.on('connection', (socket) => {
     const result = engine.skipQuadruple(socket.id);
     if (!result.success) return;
 
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logDoubling(engine, socket.id, 'skip_quadruple');
+      broadcastLogEntry(room.id, room, logger);
+    }
+
     const state = engine.getState();
 
     // If phase transitioned to playing, emit round:new
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      if (logger) logger.logRoundStart(engine, state.round.leaderId);
       setupTurnTimer(room.id, room);
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
-    }
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('play:cards', (data, cb) => {
@@ -366,10 +832,6 @@ io.on('connection', (socket) => {
     // Get the state to find what was played
     const state = engine.getState();
 
-    // Find the play that was just made (last play in the round, or last play before round reset)
-    // We need to emit play:made - find the cards that were played
-    // Since the round may have been reset (new round started), we check the current round plays
-    // or look at the previous state. We'll use the data.cards since they were validated.
     const format = state.round?.plays?.[state.round.plays.length - 1]?.format
       ?? state.round?.currentFormat
       ?? 'single';
@@ -379,6 +841,13 @@ io.on('connection', (socket) => {
       cards: data.cards,
       format,
     });
+
+    // Log
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logAction(engine, socket.id, 'play', data.cards);
+      broadcastLogEntry(room.id, room, logger);
+    }
 
     // Check if any played cards are red 10s — emit team:revealed
     const playedRed10s = data.cards.filter((c: { rank: string; isRed: boolean }) => c.rank === '10' && c.isRed);
@@ -408,39 +877,46 @@ io.on('connection', (socket) => {
       if (gameResult) {
         io.to(room.id).emit('game:scored', gameResult);
       }
+      if (logger) {
+        logger.logGameEnd(engine);
+        broadcastLogEntry(room.id, room, logger);
+      }
+      clearTurnTimer(room.id);
+      broadcastState(room.id, room, engine);
+      return;
     }
 
     // Check if cha-go was triggered
     if (state.round?.chaGoState) {
       const cg = state.round.chaGoState;
-      // Emit opportunity to eligible players
+      // Emit opportunity to eligible human players
       for (const eligibleId of cg.eligiblePlayerIds) {
-        io.to(eligibleId).emit('cha_go:opportunity', {
-          rank: cg.triggerRank,
-          timeoutMs: 10000,
-        });
+        if (!botManager.isBot(eligibleId)) {
+          io.to(eligibleId).emit('cha_go:opportunity', {
+            rank: cg.triggerRank,
+            timeoutMs: 10000,
+          });
+        }
       }
     }
 
     // Check if a new round was started (round has no plays yet = just started)
     if (state.round && state.round.plays.length === 0) {
-      // A round was won by the last player who played, then a new round started
       io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      if (logger) {
+        logger.logRoundEnd(engine, state.round.leaderId);
+        logger.logRoundStart(engine, state.round.leaderId);
+      }
     }
 
-    // Clear/reset turn timer after any play
-    if (state.phase === 'game_over') {
-      clearTurnTimer(room.id);
-    } else {
-      setupTurnTimer(room.id, room);
-    }
+    // Reset turn timer after any play
+    setupTurnTimer(room.id, room);
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
-    }
+    broadcastState(room.id, room, engine);
+
+    // Schedule bot action if next player is a bot
+    scheduleBotAction(room.id);
   });
 
   socket.on('play:defuse', (data, cb) => {
@@ -470,11 +946,14 @@ io.on('connection', (socket) => {
       cards: data.cards,
     });
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logAction(engine, socket.id, 'defuse', data.cards);
+      broadcastLogEntry(room.id, room, logger);
     }
+
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('play:cha', (data, cb) => {
@@ -506,11 +985,14 @@ io.on('connection', (socket) => {
       io.to(room.id).emit('cha_go:started', { rank: triggerRank as any, chaPlayerId: socket.id });
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logAction(engine, socket.id, 'cha', data.cards);
+      broadcastLogEntry(room.id, room, logger);
     }
+
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('play:go_cha', (data, cb) => {
@@ -536,11 +1018,14 @@ io.on('connection', (socket) => {
 
     io.to(room.id).emit('cha_go:go_cha', { playerId: socket.id, cards: data.cards });
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logAction(engine, socket.id, 'go_cha', data.cards);
+      broadcastLogEntry(room.id, room, logger);
     }
+
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('cha:decline', () => {
@@ -553,11 +1038,14 @@ io.on('connection', (socket) => {
     const result = engine.declineCha(socket.id);
     if (!result.success) return;
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logAction(engine, socket.id, 'decline_cha');
+      broadcastLogEntry(room.id, room, logger);
     }
+
+    broadcastState(room.id, room, engine);
+    scheduleBotAction(room.id);
   });
 
   socket.on('play:pass', () => {
@@ -573,22 +1061,31 @@ io.on('connection', (socket) => {
     // Emit pass event
     io.to(room.id).emit('player:passed', { playerId: socket.id });
 
+    const logger = gameLoggers.get(room.id);
+    if (logger) {
+      logger.logAction(engine, socket.id, 'pass');
+      broadcastLogEntry(room.id, room, logger);
+    }
+
     // Check if a new round started
     const state = engine.getState();
     if (state.round && state.round.plays.length === 0) {
       // Round was won, new round started
       io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      if (logger) {
+        logger.logRoundEnd(engine, state.round.leaderId);
+        logger.logRoundStart(engine, state.round.leaderId);
+      }
     }
 
     // Reset turn timer
     setupTurnTimer(room.id, room);
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
-    }
+    broadcastState(room.id, room, engine);
+
+    // Schedule bot action if next player is a bot
+    scheduleBotAction(room.id);
   });
 
   socket.on('game:play_again', () => {
@@ -598,23 +1095,49 @@ io.on('connection', (socket) => {
     const engine = games.get(room.id);
     if (!engine) return;
 
+    // Auto play-again for all bots
+    const bots = botManager.getBotsInRoom(room.id);
+    for (const bot of bots) {
+      engine.playAgain(bot.id);
+    }
+
     const result = engine.playAgain(socket.id);
 
     if (result.allReady) {
-      // Game has been reset — send new state to all players
+      // Game has been reset — create a new logger
+      const logger = new GameLogger();
+      gameLoggers.set(room.id, logger);
+
       const state = engine.getState();
 
       // If we're in the playing phase already (no doubling), emit round:new
       if (state.phase === 'playing' && state.round) {
         io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+        logger.logRoundStart(engine, state.round.leaderId);
       }
     }
 
-    // Broadcast updated game state to all players
-    for (const p of room.players.values()) {
-      const view = engine.getClientView(p.socketId);
-      io.to(p.socketId).emit('game:state', view);
+    broadcastState(room.id, room, engine);
+
+    // Schedule bot action for new game
+    if (result.allReady) {
+      scheduleBotAction(room.id);
     }
+  });
+
+  // ---- Game Log ----
+  socket.on('game:get_log', (cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ log: '' });
+      return;
+    }
+    const logger = gameLoggers.get(room.id);
+    if (!logger) {
+      cb({ log: 'No game log available.' });
+      return;
+    }
+    cb({ log: logger.getFormattedLog() });
   });
 
   socket.on('disconnect', () => {

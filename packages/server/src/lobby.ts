@@ -251,6 +251,46 @@ export function getPlayerList(room: Room): Array<{ id: string; name: string; sea
     }));
 }
 
+/**
+ * Add a bot player to a room. Used by BotManager to fill empty seats.
+ * Returns the RoomPlayer if added, null if the room is full or not found.
+ */
+export function addBotToRoom(
+  roomId: string,
+  botSocketId: string,
+  botName: string,
+): RoomPlayer | null {
+  const room = rooms.get(roomId);
+  if (!room) return null;
+
+  const connectedCount = getConnectedPlayerCount(room);
+  if (connectedCount >= PLAYER_COUNT) return null;
+
+  // Assign next available seat index
+  const takenSeats = new Set<number>();
+  for (const p of room.players.values()) {
+    takenSeats.add(p.seatIndex);
+  }
+  let seatIndex = 0;
+  while (takenSeats.has(seatIndex)) {
+    seatIndex++;
+  }
+
+  const player: RoomPlayer = {
+    socketId: botSocketId,
+    name: botName,
+    seatIndex,
+    isReady: true,
+    isConnected: true,
+    disconnectedAt: null,
+  };
+
+  room.players.set(botSocketId, player);
+  playerRoomMap.set(botSocketId, roomId);
+
+  return player;
+}
+
 // ---- Internal helpers ----
 
 function getConnectedPlayerCount(room: Room): number {

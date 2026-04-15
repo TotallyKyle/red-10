@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import type { GameLogEntry } from '../hooks/useSocket.js';
 
 interface GameLogProps {
   entries: GameLogEntry[];
+  onRequestLog?: () => void;
+  logText?: string | null;
 }
 
 const TYPE_COLORS: Record<GameLogEntry['type'], string> = {
@@ -18,7 +20,7 @@ const TYPE_COLORS: Record<GameLogEntry['type'], string> = {
   game_scored: 'text-emerald-400',
 };
 
-function GameLog({ entries }: GameLogProps) {
+function GameLog({ entries, onRequestLog, logText }: GameLogProps) {
   const [isVisible, setIsVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -28,6 +30,27 @@ function GameLog({ entries }: GameLogProps) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [entries.length, isVisible]);
+
+  const handleDownload = useCallback(() => {
+    if (onRequestLog) {
+      onRequestLog();
+    }
+  }, [onRequestLog]);
+
+  // Download the log text when it becomes available
+  useEffect(() => {
+    if (logText) {
+      const blob = new Blob([logText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `red10-game-log-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  }, [logText]);
 
   return (
     <>
@@ -47,8 +70,19 @@ function GameLog({ entries }: GameLogProps) {
       {/* Log panel */}
       {isVisible && (
         <div className="fixed top-10 right-2 z-40 w-64 sm:w-72 max-h-[60vh] bg-gray-900/95 border border-green-700 rounded-lg shadow-xl flex flex-col sm:top-12 sm:right-3">
-          <div className="px-3 py-2 border-b border-green-800 text-green-400 text-xs font-bold uppercase tracking-wider">
-            Game Log
+          <div className="px-3 py-2 border-b border-green-800 flex items-center justify-between">
+            <span className="text-green-400 text-xs font-bold uppercase tracking-wider">
+              Game Log
+            </span>
+            {onRequestLog && (
+              <button
+                onClick={handleDownload}
+                className="text-green-500 hover:text-green-300 text-[10px] font-semibold uppercase border border-green-700 rounded px-2 py-0.5 transition-colors"
+                title="Download full server log"
+              >
+                Download
+              </button>
+            )}
           </div>
           <div
             ref={scrollRef}

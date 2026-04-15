@@ -21,6 +21,8 @@ interface GameTableProps {
   gameLog: GameLogEntry[];
   errorMessage: string | null;
   turnStartTime: number | null;
+  onRequestLog?: () => void;
+  gameLogText?: string | null;
 }
 
 /**
@@ -51,7 +53,7 @@ const MOBILE_POSITIONS = [
 
 function GameTable({
   gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass,
-  onDefuse, onCha, onGoCha, onDeclineCha, gameLog, errorMessage, turnStartTime,
+  onDefuse, onCha, onGoCha, onDeclineCha, gameLog, errorMessage, turnStartTime, onRequestLog, gameLogText,
 }: GameTableProps) {
   const myPlayer = gameView.players.find((p) => p.id === mySocketId);
   const mySeatIndex = myPlayer?.seatIndex ?? 0;
@@ -180,7 +182,7 @@ function GameTable({
       </div>
 
       {/* Game log */}
-      <GameLog entries={gameLog} />
+      <GameLog entries={gameLog} onRequestLog={onRequestLog} logText={gameLogText} />
 
       {/* Toast error notification */}
       {errorMessage && (
