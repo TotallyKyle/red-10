@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { ServerToClientEvents, ClientToServerEvents, ClientGameView } from '@red10/shared';
+import type { ServerToClientEvents, ClientToServerEvents, ClientGameView, Card } from '@red10/shared';
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -28,6 +28,8 @@ export interface UseSocketReturn {
   joinRoom: (roomId: string, name: string) => void;
   toggleReady: () => void;
   startGame: () => void;
+  playCards: (cards: Card[]) => void;
+  passAction: () => void;
   mySocketId: string | null;
 }
 
@@ -134,6 +136,27 @@ export function useSocket(): UseSocketReturn {
       setGameView((prev) => (prev ? { ...prev, ...view } : null));
     });
 
+    // Animation/notification events - log for now
+    socket.on('play:made', (data) => {
+      console.log(`[play:made] ${data.playerId} played ${data.cards.length} card(s) as ${data.format}`);
+    });
+
+    socket.on('player:passed', (data) => {
+      console.log(`[player:passed] ${data.playerId} passed`);
+    });
+
+    socket.on('round:won', (data) => {
+      console.log(`[round:won] Winner: ${data.winnerId}`);
+    });
+
+    socket.on('round:new', (data) => {
+      console.log(`[round:new] Leader: ${data.leaderId}`);
+    });
+
+    socket.on('player:out', (data) => {
+      console.log(`[player:out] ${data.playerId} finished #${data.finishOrder}`);
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -205,6 +228,23 @@ export function useSocket(): UseSocketReturn {
     socket.emit('room:start');
   }, []);
 
+  const playCards = useCallback((cards: Card[]) => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('play:cards', { cards }, (res) => {
+      if (!res.success) {
+        setErrorMessage(res.error ?? 'Play failed');
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    });
+  }, []);
+
+  const passAction = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.emit('play:pass');
+  }, []);
+
   return {
     isConnected,
     roomState,
@@ -214,6 +254,8 @@ export function useSocket(): UseSocketReturn {
     joinRoom,
     toggleReady,
     startGame,
+    playCards,
+    passAction,
     mySocketId,
   };
 }

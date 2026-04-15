@@ -6,7 +6,7 @@ import GameTable from './components/GameTable.js';
 
 function App() {
   const socket = useSocket();
-  const { gameView, mySocketId } = socket;
+  const { gameView, mySocketId, playCards, passAction } = socket;
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
   const handleToggleCard = useCallback((card: Card) => {
@@ -19,6 +19,17 @@ function App() {
     });
   }, []);
 
+  const handlePlay = useCallback(() => {
+    if (selectedCards.length === 0) return;
+    playCards(selectedCards);
+    setSelectedCards([]);
+  }, [selectedCards, playCards]);
+
+  const handlePass = useCallback(() => {
+    passAction();
+    setSelectedCards([]);
+  }, [passAction]);
+
   // Game has started -- show game table
   if (gameView && mySocketId) {
     return (
@@ -27,6 +38,8 @@ function App() {
         mySocketId={mySocketId}
         selectedCards={selectedCards}
         onToggleCard={handleToggleCard}
+        onPlay={handlePlay}
+        onPass={handlePass}
       />
     );
   }

@@ -1,12 +1,16 @@
 import type { ClientGameView, Card as CardType } from '@red10/shared';
 import PlayerHand from './PlayerHand.js';
 import OtherPlayer from './OtherPlayer.js';
+import PlayArea from './PlayArea.js';
+import ActionBar from './ActionBar.js';
 
 interface GameTableProps {
   gameView: ClientGameView;
   mySocketId: string;
   selectedCards: CardType[];
   onToggleCard: (card: CardType) => void;
+  onPlay: () => void;
+  onPass: () => void;
 }
 
 /**
@@ -26,7 +30,7 @@ const POSITIONS = [
   { top: '18%', left: '8%' },
 ] as const;
 
-function GameTable({ gameView, mySocketId, selectedCards, onToggleCard }: GameTableProps) {
+function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass }: GameTableProps) {
   const myPlayer = gameView.players.find((p) => p.id === mySocketId);
   const mySeatIndex = myPlayer?.seatIndex ?? 0;
 
@@ -39,6 +43,14 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard }: GameTa
       const bRel = (b.seatIndex - mySeatIndex + 6) % 6;
       return aRel - bRel;
     });
+
+  // Find the current player's name for the action bar
+  const currentPlayer = gameView.round
+    ? gameView.players.find((p) => p.id === gameView.round!.currentPlayerId)
+    : null;
+  const currentPlayerName = currentPlayer?.id === mySocketId
+    ? undefined
+    : currentPlayer?.name;
 
   return (
     <div className="min-h-screen bg-green-900 relative overflow-hidden">
@@ -65,27 +77,28 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard }: GameTa
       <div className="absolute inset-8 top-12 bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
 
       {/* Center play area */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-32 rounded-xl border-2 border-dashed border-green-600/50 flex items-center justify-center">
-        <span className="text-green-600/50 text-sm">Play Area</span>
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+        <PlayArea round={gameView.round} players={gameView.players} />
       </div>
 
       {/* Other players */}
       {otherPlayers.map((player, index) => {
         const pos = POSITIONS[index];
         if (!pos) return null;
+        const isCurrentTurn = gameView.round?.currentPlayerId === player.id;
         return (
           <div
             key={player.id}
             className="absolute z-10"
             style={pos as React.CSSProperties}
           >
-            <OtherPlayer player={player} />
+            <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} />
           </div>
         );
       })}
 
       {/* My hand at the bottom */}
-      <div className="absolute bottom-0 left-0 right-0 z-20">
+      <div className="absolute bottom-12 left-0 right-0 z-20">
         {/* Player name label */}
         <div className="text-center mb-1">
           <span className="text-white text-sm font-semibold">
@@ -97,6 +110,18 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard }: GameTa
           cards={gameView.myHand}
           selectedCards={selectedCards}
           onToggleCard={onToggleCard}
+        />
+      </div>
+
+      {/* Action bar at the very bottom */}
+      <div className="absolute bottom-0 left-0 right-0 z-30">
+        <ActionBar
+          validActions={gameView.validActions}
+          isMyTurn={gameView.isMyTurn}
+          selectedCards={selectedCards}
+          onPlay={onPlay}
+          onPass={onPass}
+          currentPlayerName={currentPlayerName}
         />
       </div>
     </div>

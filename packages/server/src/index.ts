@@ -30,6 +30,7 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
@@ -112,7 +113,102 @@ io.on('connection', (socket) => {
       io.to(p.socketId).emit('game:state', view);
     }
 
+    // Emit round:new event
+    const state = engine.getState();
+    if (state.round) {
+      io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
     console.log(`Game started in room ${room.id}`);
+  });
+
+  socket.on('play:cards', (data, cb) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      cb({ success: false, error: 'Not in a room' });
+      return;
+    }
+
+    const engine = games.get(room.id);
+    if (!engine) {
+      cb({ success: false, error: 'No active game' });
+      return;
+    }
+
+    const result = engine.playCards(socket.id, data.cards);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
+      return;
+    }
+
+    cb({ success: true });
+
+    // Get the state to find what was played
+    const state = engine.getState();
+
+    // Find the play that was just made (last play in the round, or last play before round reset)
+    // We need to emit play:made - find the cards that were played
+    // Since the round may have been reset (new round started), we check the current round plays
+    // or look at the previous state. We'll use the data.cards since they were validated.
+    const format = state.round?.plays?.[state.round.plays.length - 1]?.format
+      ?? state.round?.currentFormat
+      ?? 'single';
+
+    io.to(room.id).emit('play:made', {
+      playerId: socket.id,
+      cards: data.cards,
+      format,
+    });
+
+    // Check if the player went out
+    const player = state.players.find((p) => p.id === socket.id);
+    if (player?.isOut && player.finishOrder !== null) {
+      io.to(room.id).emit('player:out', {
+        playerId: socket.id,
+        finishOrder: player.finishOrder,
+      });
+    }
+
+    // Check if a new round was started (round has no plays yet = just started)
+    if (state.round && state.round.plays.length === 0) {
+      // A round was won by the last player who played, then a new round started
+      io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
+      io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+  });
+
+  socket.on('play:pass', () => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) return;
+
+    const engine = games.get(room.id);
+    if (!engine) return;
+
+    const result = engine.pass(socket.id);
+    if (!result.success) return;
+
+    // Emit pass event
+    io.to(room.id).emit('player:passed', { playerId: socket.id });
+
+    // Check if a new round started
+    const state = engine.getState();
+    if (state.round && state.round.plays.length === 0) {
+      // Round was won, new round started
+      io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
+      io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
   });
 
   socket.on('disconnect', () => {
