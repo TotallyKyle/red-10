@@ -1448,4 +1448,104 @@ export class GameEngine {
   getState(): GameState {
     return this.state;
   }
+
+  /**
+   * Update a player's socket ID after reconnection.
+   * Also restores their isConnected status.
+   */
+  updatePlayerId(oldId: string, newId: string): boolean {
+    const player = this.state.players.find((p) => p.id === oldId);
+    if (!player) return false;
+
+    player.id = newId;
+    player.isConnected = true;
+
+    // Update all references to the old ID
+    this.state.turnOrder = this.state.turnOrder.map((id) => (id === oldId ? newId : id));
+    this.state.finishOrder = this.state.finishOrder.map((id) => (id === oldId ? newId : id));
+
+    if (this.state.round) {
+      if (this.state.round.leaderId === oldId) this.state.round.leaderId = newId;
+      if (this.state.round.currentPlayerId === oldId) this.state.round.currentPlayerId = newId;
+      for (const play of this.state.round.plays) {
+        if (play.playerId === oldId) play.playerId = newId;
+      }
+      if (this.state.round.lastPlay?.playerId === oldId) {
+        this.state.round.lastPlay.playerId = newId;
+      }
+      if (this.state.round.chaGoState) {
+        const cg = this.state.round.chaGoState;
+        if (cg.chaPlayerId === oldId) cg.chaPlayerId = newId;
+        if (cg.goPlayerId === oldId) cg.goPlayerId = newId;
+        cg.eligiblePlayerIds = cg.eligiblePlayerIds.map((id) => (id === oldId ? newId : id));
+        cg.declinedPlayerIds = cg.declinedPlayerIds.map((id) => (id === oldId ? newId : id));
+      }
+    }
+
+    if (this.state.doubling) {
+      if (this.state.doubling.currentBidderId === oldId) this.state.doubling.currentBidderId = newId;
+      for (const bomb of this.state.doubling.revealedBombs) {
+        if (bomb.playerId === oldId) bomb.playerId = newId;
+      }
+    }
+
+    if (this.state.previousGameWinner === oldId) {
+      this.state.previousGameWinner = newId;
+    }
+
+    // Update doubling turn order
+    this.doublingTurnOrder = this.doublingTurnOrder.map((id) => (id === oldId ? newId : id));
+
+    // Update play again set
+    if (this.playAgainPlayerIds.has(oldId)) {
+      this.playAgainPlayerIds.delete(oldId);
+      this.playAgainPlayerIds.add(newId);
+    }
+
+    // Update quadruple skipped set
+    if (this.quadrupleSkipped.has(oldId)) {
+      this.quadrupleSkipped.delete(oldId);
+      this.quadrupleSkipped.add(newId);
+    }
+
+    // Update game result payouts
+    if (this.gameResult?.payouts[oldId] !== undefined) {
+      this.gameResult.payouts[newId] = this.gameResult.payouts[oldId];
+      delete this.gameResult.payouts[oldId];
+    }
+    if (this.gameResult?.trapped.includes(oldId)) {
+      this.gameResult.trapped = this.gameResult.trapped.map((id) => (id === oldId ? newId : id));
+    }
+
+    return true;
+  }
+
+  /**
+   * Mark a player as disconnected.
+   */
+  setPlayerDisconnected(playerId: string): void {
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (player) {
+      player.isConnected = false;
+    }
+  }
+
+  /**
+   * Set up a turn timer. Returns a cleanup function.
+   * If the player doesn't act within timeoutMs, auto-passes.
+   */
+  setupTurnTimer(timeoutMs: number, onAutoPass: (playerId: string) => void): (() => void) | null {
+    if (this.state.phase !== 'playing' || !this.state.round) return null;
+    const currentPlayerId = this.state.round.currentPlayerId;
+    const timer = setTimeout(() => {
+      // Verify it's still this player's turn
+      if (this.state.phase === 'playing' && this.state.round?.currentPlayerId === currentPlayerId) {
+        const result = this.pass(currentPlayerId);
+        if (result.success) {
+          onAutoPass(currentPlayerId);
+        }
+      }
+    }, timeoutMs);
+    return () => clearTimeout(timer);
+  }
 }

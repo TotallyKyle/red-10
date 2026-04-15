@@ -255,4 +255,5 @@ export interface ClientToServerEvents {
   'play:defuse': (data: { cards: Card[] }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'cha:decline': () => void;
   'game:play_again': () => void;
+  'room:rejoin': (data: { roomId: string; playerName: string }, cb: (res: { success: boolean; error?: string }) => void) => void;
 }

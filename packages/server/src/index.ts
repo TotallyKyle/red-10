@@ -8,6 +8,8 @@ import {
   toggleReady,
   startGame,
   handleDisconnect,
+  handleReconnect,
+  findDisconnectedPlayer,
   getPlayerList,
   getRoomForSocket,
 } from './lobby.js';
@@ -15,6 +17,53 @@ import { GameEngine } from './game/GameEngine.js';
 
 /** Active game engines, keyed by roomId */
 const games = new Map<string, GameEngine>();
+
+/** Active turn timers, keyed by roomId. Stores cleanup function. */
+const turnTimers = new Map<string, () => void>();
+
+const TURN_TIMEOUT_MS = 30_000;
+
+/** Set up turn timer for the current player. Clears any previous timer for this room. */
+function setupTurnTimer(roomId: string, room: { players: Map<string, { socketId: string }> }) {
+  // Clear existing timer
+  const existingCleanup = turnTimers.get(roomId);
+  if (existingCleanup) existingCleanup();
+  turnTimers.delete(roomId);
+
+  const engine = games.get(roomId);
+  if (!engine) return;
+
+  const cleanup = engine.setupTurnTimer(TURN_TIMEOUT_MS, (playerId) => {
+    // Auto-pass happened
+    io.to(roomId).emit('player:passed', { playerId });
+
+    const state = engine.getState();
+    if (state.round && state.round.plays.length === 0) {
+      io.to(roomId).emit('round:won', { winnerId: state.round.leaderId });
+      io.to(roomId).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Broadcast updated game state to all players
+    for (const p of room.players.values()) {
+      const view = engine.getClientView(p.socketId);
+      io.to(p.socketId).emit('game:state', view);
+    }
+
+    // Set up next turn timer
+    setupTurnTimer(roomId, room);
+  });
+
+  if (cleanup) {
+    turnTimers.set(roomId, cleanup);
+  }
+}
+
+/** Clear turn timer for a room */
+function clearTurnTimer(roomId: string) {
+  const cleanup = turnTimers.get(roomId);
+  if (cleanup) cleanup();
+  turnTimers.delete(roomId);
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -33,6 +82,39 @@ app.get('/health', (_req, res) => {
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
+
+  // ---- Reconnection ----
+  socket.on('room:rejoin', (data, cb) => {
+    const { roomId, playerName } = data;
+    const normalizedRoomId = roomId.toUpperCase();
+
+    const found = findDisconnectedPlayer(normalizedRoomId, playerName);
+    if (!found) {
+      cb({ success: false, error: 'No disconnected player found with that name in this room' });
+      return;
+    }
+
+    const { room, oldSocketId } = found;
+    const reconnectResult = handleReconnect(oldSocketId, socket.id!, normalizedRoomId);
+    if (!reconnectResult) {
+      cb({ success: false, error: 'Reconnection failed' });
+      return;
+    }
+
+    void socket.join(normalizedRoomId);
+
+    // Update game engine player ID if game is active
+    const engine = games.get(normalizedRoomId);
+    if (engine) {
+      engine.updatePlayerId(oldSocketId, socket.id!);
+      // Send full game state to reconnected player
+      const view = engine.getClientView(socket.id!);
+      socket.emit('game:state', view);
+    }
+
+    console.log(`${playerName} (${socket.id}) rejoined room ${normalizedRoomId} (was ${oldSocketId})`);
+    cb({ success: true });
+  });
 
   socket.on('room:create', (data, cb) => {
     const { playerName } = data;
@@ -117,6 +199,7 @@ io.on('connection', (socket) => {
     const state = engine.getState();
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      setupTurnTimer(room.id, room);
     }
 
     console.log(`Game started in room ${room.id}`);
@@ -188,6 +271,7 @@ io.on('connection', (socket) => {
     // If phase transitioned to playing, emit round:new
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      setupTurnTimer(room.id, room);
     }
 
     // Broadcast updated game state to all players
@@ -223,6 +307,7 @@ io.on('connection', (socket) => {
     // If phase transitioned to playing, emit round:new
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      setupTurnTimer(room.id, room);
     }
 
     // Broadcast updated game state to all players
@@ -247,6 +332,7 @@ io.on('connection', (socket) => {
     // If phase transitioned to playing, emit round:new
     if (state.phase === 'playing' && state.round) {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+      setupTurnTimer(room.id, room);
     }
 
     // Broadcast updated game state to all players
@@ -341,6 +427,13 @@ io.on('connection', (socket) => {
       // A round was won by the last player who played, then a new round started
       io.to(room.id).emit('round:won', { winnerId: state.round.leaderId });
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
+    }
+
+    // Clear/reset turn timer after any play
+    if (state.phase === 'game_over') {
+      clearTurnTimer(room.id);
+    } else {
+      setupTurnTimer(room.id, room);
     }
 
     // Broadcast updated game state to all players
@@ -488,6 +581,9 @@ io.on('connection', (socket) => {
       io.to(room.id).emit('round:new', { leaderId: state.round.leaderId });
     }
 
+    // Reset turn timer
+    setupTurnTimer(room.id, room);
+
     // Broadcast updated game state to all players
     for (const p of room.players.values()) {
       const view = engine.getClientView(p.socketId);
@@ -526,6 +622,15 @@ io.on('connection', (socket) => {
 
     const room = getRoomForSocket(socket.id);
     const oldHostId = room?.hostId;
+
+    // Mark player as disconnected in game engine
+    if (room) {
+      const engine = games.get(room.id);
+      if (engine) {
+        engine.setPlayerDisconnected(socket.id!);
+      }
+    }
+
     const result = handleDisconnect(socket.id);
     if (result && room) {
       io.to(room.id).emit('room:player_left', { playerId: socket.id });

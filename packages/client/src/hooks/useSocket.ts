@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { ServerToClientEvents, ClientToServerEvents, ClientGameView, Card } from '@red10/shared';
+import type { ServerToClientEvents, ClientToServerEvents, ClientGameView, Card, PlayFormat, Rank, Team } from '@red10/shared';
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -19,11 +19,19 @@ export interface RoomState {
   isHost: boolean;
 }
 
+export interface GameLogEntry {
+  id: number;
+  timestamp: number;
+  type: 'play' | 'pass' | 'round_won' | 'round_new' | 'cha_go' | 'bomb_defused' | 'team_revealed' | 'double' | 'player_out' | 'game_scored';
+  message: string;
+}
+
 export interface UseSocketReturn {
   isConnected: boolean;
   roomState: RoomState | null;
   gameView: ClientGameView | null;
   errorMessage: string | null;
+  gameLog: GameLogEntry[];
   createRoom: (name: string) => void;
   joinRoom: (roomId: string, name: string) => void;
   toggleReady: () => void;
@@ -40,7 +48,27 @@ export interface UseSocketReturn {
   skipQuadrupleAction: () => void;
   playAgain: () => void;
   mySocketId: string | null;
+  turnStartTime: number | null;
 }
+
+// Helper to resolve a player name from the game view
+function getPlayerName(gameView: ClientGameView | null, playerId: string): string {
+  if (!gameView) return playerId.slice(0, 8);
+  const player = gameView.players.find((p) => p.id === playerId);
+  return player?.name ?? playerId.slice(0, 8);
+}
+
+function formatCards(cards: Card[]): string {
+  return cards.map((c) => `${c.rank}${c.isRed ? '♥' : '♠'}`).join(' ');
+}
+
+const FORMAT_NAMES: Record<PlayFormat, string> = {
+  single: 'single',
+  pair: 'pair',
+  straight: 'straight',
+  paired_straight: 'paired straight',
+  bomb: 'BOMB',
+};
 
 export function useSocket(): UseSocketReturn {
   const socketRef = useRef<TypedSocket | null>(null);
@@ -49,12 +77,31 @@ export function useSocket(): UseSocketReturn {
   const [gameView, setGameView] = useState<ClientGameView | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [mySocketId, setMySocketId] = useState<string | null>(null);
+  const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
+  const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
 
   // Track players and ready states locally since server sends incremental events
   const playersRef = useRef<RoomPlayer[]>([]);
   const roomIdRef = useRef<string | null>(null);
   const hostIdRef = useRef<string | null>(null);
   const myNameRef = useRef<string | null>(null);
+  const gameViewRef = useRef<ClientGameView | null>(null);
+  const logIdRef = useRef(0);
+
+  // Keep gameViewRef in sync
+  useEffect(() => {
+    gameViewRef.current = gameView;
+  }, [gameView]);
+
+  const addLogEntry = useCallback((type: GameLogEntry['type'], message: string) => {
+    const entry: GameLogEntry = {
+      id: ++logIdRef.current,
+      timestamp: Date.now(),
+      type,
+      message,
+    };
+    setGameLog((prev) => [...prev, entry]);
+  }, []);
 
   const updateRoomState = useCallback((roomId: string, players: RoomPlayer[]) => {
     const socket = socketRef.current;
@@ -77,6 +124,19 @@ export function useSocket(): UseSocketReturn {
     socket.on('connect', () => {
       setIsConnected(true);
       setMySocketId(socket.id ?? null);
+
+      // Attempt rejoin if we have stored room info
+      const storedRoomId = roomIdRef.current;
+      const storedName = myNameRef.current;
+      if (storedRoomId && storedName && gameViewRef.current) {
+        socket.emit('room:rejoin' as any, { roomId: storedRoomId, playerName: storedName }, (res: { success: boolean; error?: string }) => {
+          if (res.success) {
+            console.log(`Successfully rejoined room ${storedRoomId}`);
+          } else {
+            console.log(`Rejoin failed: ${res.error}`);
+          }
+        });
+      }
     });
 
     socket.on('disconnect', () => {
@@ -139,59 +199,92 @@ export function useSocket(): UseSocketReturn {
 
     socket.on('game:state', (view) => {
       setGameView(view);
+      // Reset turn timer on new state
+      if (view.phase === 'playing' && view.round) {
+        setTurnStartTime(Date.now());
+      } else {
+        setTurnStartTime(null);
+      }
     });
 
     socket.on('game:update', (view) => {
       setGameView((prev) => (prev ? { ...prev, ...view } : null));
     });
 
-    // Animation/notification events - log for now
+    // Animation/notification events - populate game log
     socket.on('play:made', (data) => {
-      console.log(`[play:made] ${data.playerId} played ${data.cards.length} card(s) as ${data.format}`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.playerId);
+      const formatName = FORMAT_NAMES[data.format] ?? data.format;
+      const msg = `${name} played ${formatName}: ${formatCards(data.cards)}`;
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'play', message: msg }]);
     });
 
     socket.on('player:passed', (data) => {
-      console.log(`[player:passed] ${data.playerId} passed`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.playerId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'pass', message: `${name} passed` }]);
     });
 
     socket.on('round:won', (data) => {
-      console.log(`[round:won] Winner: ${data.winnerId}`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.winnerId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'round_won', message: `${name} won the round` }]);
     });
 
     socket.on('round:new', (data) => {
-      console.log(`[round:new] Leader: ${data.leaderId}`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.leaderId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'round_new', message: `New round - ${name} leads` }]);
     });
 
     socket.on('player:out', (data) => {
-      console.log(`[player:out] ${data.playerId} finished #${data.finishOrder}`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.playerId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'player_out', message: `${name} finished #${data.finishOrder}` }]);
     });
 
     socket.on('bomb:defused', (data) => {
-      console.log(`[bomb:defused] ${data.defuserId} defused with ${data.cards.length} card(s)`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.defuserId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'bomb_defused', message: `${name} defused the bomb!` }]);
     });
 
     socket.on('team:revealed', (data) => {
-      console.log(`[team:revealed] ${data.playerId} is on team ${data.team} (red10 count: ${data.red10Count})`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.playerId);
+      const team = data.team === 'red10' ? 'Red' : 'Black';
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'team_revealed', message: `${name} revealed as ${team} team${data.red10Count ? ` (${data.red10Count} red 10s)` : ''}` }]);
     });
 
     socket.on('cha_go:started', (data) => {
-      console.log(`[cha_go:started] Cha on rank ${data.rank} by ${data.chaPlayerId}`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.chaPlayerId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'cha_go', message: `${name} declared Cha on ${data.rank}!` }]);
     });
 
     socket.on('cha_go:opportunity', (data) => {
-      console.log(`[cha_go:opportunity] You can cha on rank ${data.rank} (timeout: ${data.timeoutMs}ms)`);
+      // Don't log to game log, this is personal
     });
 
     socket.on('cha_go:go_cha', (data) => {
-      console.log(`[cha_go:go_cha] ${data.playerId} played go-cha with ${data.cards.length} cards`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.playerId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'cha_go', message: `${name} played Go-Cha!` }]);
     });
 
     socket.on('double:declared', (data) => {
-      console.log(`[double:declared] ${data.playerId} doubled${data.revealedCards ? ` (revealed ${data.revealedCards.length} cards)` : ''}`);
+      const gv = gameViewRef.current;
+      const name = getPlayerName(gv, data.playerId);
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'double', message: `${name} doubled the stakes!` }]);
     });
 
     socket.on('game:scored', (result) => {
-      console.log(`[game:scored] ${result.scoringTeam} ${result.scoringTeamWon ? 'won' : 'lost'}. Trapped: ${result.trapped.length}`);
+      const team = result.scoringTeam === 'red10' ? 'Red' : 'Black';
+      const msg = result.scoringTeamWon
+        ? `${team} team wins! ${result.trapped.length} player(s) trapped.`
+        : `${team} team failed to trap anyone.`;
+      setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'game_scored', message: msg }]);
     });
 
     return () => {
@@ -205,6 +298,7 @@ export function useSocket(): UseSocketReturn {
 
     setErrorMessage(null);
     myNameRef.current = name;
+    setGameLog([]);
 
     socket.emit('room:create', { playerName: name }, (res) => {
       roomIdRef.current = res.roomId;
@@ -228,6 +322,7 @@ export function useSocket(): UseSocketReturn {
 
     setErrorMessage(null);
     myNameRef.current = name;
+    setGameLog([]);
 
     socket.emit('room:join', { roomId: roomId.toUpperCase(), playerName: name }, (res) => {
       if (res.success) {
@@ -366,6 +461,7 @@ export function useSocket(): UseSocketReturn {
     roomState,
     gameView,
     errorMessage,
+    gameLog,
     createRoom,
     joinRoom,
     toggleReady,
@@ -382,5 +478,6 @@ export function useSocket(): UseSocketReturn {
     skipQuadrupleAction,
     playAgain,
     mySocketId,
+    turnStartTime,
   };
 }

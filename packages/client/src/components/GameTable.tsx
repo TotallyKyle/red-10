@@ -1,8 +1,11 @@
 import type { ClientGameView, Card as CardType } from '@red10/shared';
+import type { GameLogEntry } from '../hooks/useSocket.js';
 import PlayerHand from './PlayerHand.js';
 import OtherPlayer from './OtherPlayer.js';
 import PlayArea from './PlayArea.js';
 import ActionBar from './ActionBar.js';
+import GameLog from './GameLog.js';
+import TurnTimer from './TurnTimer.js';
 
 interface GameTableProps {
   gameView: ClientGameView;
@@ -15,6 +18,9 @@ interface GameTableProps {
   onCha: () => void;
   onGoCha: () => void;
   onDeclineCha: () => void;
+  gameLog: GameLogEntry[];
+  errorMessage: string | null;
+  turnStartTime: number | null;
 }
 
 /**
@@ -25,16 +31,28 @@ const POSITIONS = [
   // top center
   { top: '4%', left: '50%', transform: 'translateX(-50%)' },
   // top right
-  { top: '18%', right: '8%' },
+  { top: '18%', right: '4%' },
   // bottom right
-  { bottom: '28%', right: '8%' },
+  { bottom: '28%', right: '4%' },
   // bottom left
-  { bottom: '28%', left: '8%' },
+  { bottom: '28%', left: '4%' },
   // top left
-  { top: '18%', left: '8%' },
+  { top: '18%', left: '4%' },
 ] as const;
 
-function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass, onDefuse, onCha, onGoCha, onDeclineCha }: GameTableProps) {
+/** Mobile positions: tighter layout for small screens */
+const MOBILE_POSITIONS = [
+  { top: '2%', left: '50%', transform: 'translateX(-50%)' },
+  { top: '15%', right: '2%' },
+  { bottom: '30%', right: '2%' },
+  { bottom: '30%', left: '2%' },
+  { top: '15%', left: '2%' },
+] as const;
+
+function GameTable({
+  gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass,
+  onDefuse, onCha, onGoCha, onDeclineCha, gameLog, errorMessage, turnStartTime,
+}: GameTableProps) {
   const myPlayer = gameView.players.find((p) => p.id === mySocketId);
   const mySeatIndex = myPlayer?.seatIndex ?? 0;
 
@@ -56,13 +74,16 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, 
     ? undefined
     : currentPlayer?.name;
 
+  const stakeLabel = gameView.stakeMultiplier === 2
+    ? 'DOUBLED'
+    : gameView.stakeMultiplier === 4
+      ? 'QUADRUPLED'
+      : null;
+
   return (
     <div className="min-h-screen bg-green-900 relative overflow-hidden">
       {/* Game info bar */}
-      <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex gap-3 items-center">
-        <span className="text-green-300 text-xs uppercase tracking-wider">
-          Phase: <span className="text-emerald-400 font-mono">{gameView.phase}</span>
-        </span>
+      <div className="absolute top-2 left-2 sm:left-1/2 sm:-translate-x-1/2 z-10 flex gap-2 sm:gap-3 items-center flex-wrap">
         <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
           gameView.myTeam === 'red10'
             ? 'bg-red-600 text-white'
@@ -70,18 +91,25 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, 
         }`}>
           {gameView.myTeam === 'red10' ? 'Red Team' : 'Black Team'}
         </span>
-        {gameView.stakeMultiplier > 1 && (
-          <span className="text-yellow-400 text-xs font-bold">
-            x{gameView.stakeMultiplier}
+        {stakeLabel && (
+          <span className="text-yellow-400 text-xs font-bold bg-yellow-900/60 px-2 py-0.5 rounded-full animate-pulse">
+            x{gameView.stakeMultiplier} {stakeLabel}
           </span>
+        )}
+        {/* Turn timer */}
+        {gameView.phase === 'playing' && gameView.round && (
+          <TurnTimer
+            turnStartTime={turnStartTime}
+            isMyTurn={gameView.isMyTurn}
+          />
         )}
       </div>
 
       {/* Table surface */}
-      <div className="absolute inset-8 top-12 bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
+      <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-32 sm:bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
 
       {/* Center play area */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+      <div className="absolute top-[40%] sm:top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-[280px] sm:w-auto">
         <PlayArea round={gameView.round} players={gameView.players} />
       </div>
 
@@ -93,19 +121,34 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, 
         return (
           <div
             key={player.id}
-            className="absolute z-10"
+            className="absolute z-10 hidden sm:block"
             style={pos as React.CSSProperties}
           >
             <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} />
           </div>
         );
       })}
+      {/* Mobile player positions */}
+      {otherPlayers.map((player, index) => {
+        const pos = MOBILE_POSITIONS[index];
+        if (!pos) return null;
+        const isCurrentTurn = gameView.round?.currentPlayerId === player.id;
+        return (
+          <div
+            key={`mobile-${player.id}`}
+            className="absolute z-10 sm:hidden"
+            style={pos as React.CSSProperties}
+          >
+            <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} compact />
+          </div>
+        );
+      })}
 
       {/* My hand at the bottom */}
-      <div className="absolute bottom-12 left-0 right-0 z-20">
+      <div className="absolute bottom-12 sm:bottom-12 left-0 right-0 z-20">
         {/* Player name label */}
         <div className="text-center mb-1">
-          <span className="text-white text-sm font-semibold">
+          <span className="text-white text-xs sm:text-sm font-semibold">
             {myPlayer?.name ?? 'You'}
           </span>
           <span className="text-green-400 text-xs ml-1">(You)</span>
@@ -131,8 +174,20 @@ function GameTable({ gameView, mySocketId, selectedCards, onToggleCard, onPlay, 
           onDeclineCha={onDeclineCha}
           currentPlayerName={currentPlayerName}
           chaGoState={gameView.round?.chaGoState}
+          round={gameView.round}
+          errorMessage={errorMessage}
         />
       </div>
+
+      {/* Game log */}
+      <GameLog entries={gameLog} />
+
+      {/* Toast error notification */}
+      {errorMessage && (
+        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-50 bg-red-900/95 border border-red-600 rounded-lg px-4 py-2 text-red-200 text-sm shadow-xl animate-fade-in max-w-[90vw] sm:max-w-md">
+          {errorMessage}
+        </div>
+      )}
     </div>
   );
 }

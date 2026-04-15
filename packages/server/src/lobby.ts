@@ -223,6 +223,22 @@ export function getRoomForSocket(socketId: string): Room | undefined {
   return rooms.get(roomId);
 }
 
+/**
+ * Find a disconnected player in a room by name.
+ * Returns the old socket ID if found, null otherwise.
+ */
+export function findDisconnectedPlayer(roomId: string, playerName: string): { room: Room; oldSocketId: string } | null {
+  const room = rooms.get(roomId);
+  if (!room) return null;
+
+  for (const [socketId, player] of room.players.entries()) {
+    if (player.name === playerName && !player.isConnected) {
+      return { room, oldSocketId: socketId };
+    }
+  }
+  return null;
+}
+
 export function getPlayerList(room: Room): Array<{ id: string; name: string; seatIndex: number; isReady: boolean; isConnected: boolean }> {
   return [...room.players.values()]
     .sort((a, b) => a.seatIndex - b.seatIndex)
