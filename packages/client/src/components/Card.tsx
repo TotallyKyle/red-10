@@ -6,52 +6,72 @@ interface CardProps {
   selected?: boolean;
   faceDown?: boolean;
   onClick?: () => void;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
 }
 
-const sizeClasses = {
-  sm: 'w-10 h-14 text-xs',
-  md: 'w-14 h-20 text-sm',
-  lg: 'w-20 h-28 text-base',
+const sizeDimensions = {
+  sm: { w: 'w-10', h: 'h-14', rank: 'text-[10px]', suit: 'text-[9px]', center: 'text-lg', pad: 'p-0.5' },
+  md: { w: 'w-14', h: 'h-20', rank: 'text-xs', suit: 'text-[10px]', center: 'text-xl', pad: 'p-1' },
+  lg: { w: 'w-20', h: 'h-28', rank: 'text-sm', suit: 'text-xs', center: 'text-2xl', pad: 'p-1.5' },
+  xl: { w: 'w-24', h: 'h-[136px]', rank: 'text-base', suit: 'text-sm', center: 'text-3xl', pad: 'p-2' },
 } as const;
 
 function Card({ card, selected = false, faceDown = false, onClick, size = 'md' }: CardProps) {
-  const sizeClass = sizeClasses[size];
+  const s = sizeDimensions[size];
 
   if (faceDown) {
     return (
       <div
-        className={`${sizeClass} rounded-lg border-2 border-gray-500 bg-gradient-to-br from-blue-800 to-blue-950 shadow-md flex items-center justify-center cursor-default select-none`}
+        className={`${s.w} ${s.h} rounded-lg border border-gray-400/50 bg-gradient-to-br from-blue-700 via-blue-800 to-blue-950 shadow-md flex items-center justify-center cursor-default select-none overflow-hidden`}
       >
-        <div className="w-3/4 h-3/4 rounded border border-blue-600 bg-blue-900/50" />
+        {/* Cross-hatch pattern */}
+        <div className="w-[85%] h-[85%] rounded-md border border-blue-400/30 bg-blue-900/40 flex items-center justify-center">
+          <div className="text-blue-400/30 text-xs font-bold">R10</div>
+        </div>
       </div>
     );
   }
 
-  const colorClass = card.isRed ? 'text-red-600' : 'text-gray-900';
+  const isRed = card.isRed;
+  const colorClass = isRed ? 'text-red-600' : 'text-gray-800';
   const suitSymbol = SUIT_DISPLAY[card.suit] ?? card.suit;
   const rankLabel = RANK_DISPLAY[card.rank] ?? card.rank;
+
+  // Determine if this is a "10" card for special red 10 treatment
+  const isRedTen = card.rank === '10' && isRed;
 
   return (
     <div
       onClick={onClick}
-      className={`${sizeClass} rounded-lg border-2 bg-white shadow-md flex flex-col justify-between p-1 select-none transition-all duration-150 ${
+      className={`${s.w} ${s.h} rounded-lg bg-white shadow-md flex flex-col justify-between ${s.pad} select-none transition-all duration-150 overflow-hidden relative ${
         selected
-          ? 'border-yellow-400 ring-2 ring-yellow-300 -translate-y-2 shadow-yellow-300/40'
-          : 'border-gray-300 hover:border-gray-400'
-      } ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
+          ? 'border-2 border-yellow-400 ring-2 ring-yellow-300/60 -translate-y-3 shadow-lg shadow-yellow-400/30'
+          : 'border border-gray-300 hover:border-gray-400 hover:shadow-lg'
+      } ${onClick ? 'cursor-pointer' : 'cursor-default'} ${
+        isRedTen ? 'bg-gradient-to-b from-white to-red-50' : ''
+      }`}
     >
-      <div className={`${colorClass} font-bold leading-none`}>
-        <div>{rankLabel}</div>
-        <div>{suitSymbol}</div>
+      {/* Top-left corner: rank + suit */}
+      <div className={`${colorClass} font-bold leading-tight`}>
+        <div className={`${s.rank} leading-none`}>{rankLabel}</div>
+        <div className={`${s.suit} leading-none -mt-px`}>{suitSymbol}</div>
       </div>
-      <div className={`${colorClass} text-center text-lg leading-none`}>
+
+      {/* Center suit symbol — large and prominent */}
+      <div className={`${colorClass} ${s.center} font-normal leading-none text-center flex-1 flex items-center justify-center`}>
         {suitSymbol}
       </div>
-      <div className={`${colorClass} font-bold leading-none self-end rotate-180`}>
-        <div>{rankLabel}</div>
-        <div>{suitSymbol}</div>
+
+      {/* Bottom-right corner: rank + suit (inverted) */}
+      <div className={`${colorClass} font-bold leading-tight self-end rotate-180`}>
+        <div className={`${s.rank} leading-none`}>{rankLabel}</div>
+        <div className={`${s.suit} leading-none -mt-px`}>{suitSymbol}</div>
       </div>
+
+      {/* Red 10 special glow indicator */}
+      {isRedTen && (
+        <div className="absolute inset-0 rounded-lg ring-1 ring-red-300/30 pointer-events-none" />
+      )}
     </div>
   );
 }

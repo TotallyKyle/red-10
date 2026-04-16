@@ -86,9 +86,10 @@ export function useSocket(): UseSocketReturn {
 
   // Track players and ready states locally since server sends incremental events
   const playersRef = useRef<RoomPlayer[]>([]);
-  const roomIdRef = useRef<string | null>(null);
+  // Persist room/name in sessionStorage so we survive HMR and page reloads
+  const roomIdRef = useRef<string | null>(sessionStorage.getItem('red10_roomId'));
   const hostIdRef = useRef<string | null>(null);
-  const myNameRef = useRef<string | null>(null);
+  const myNameRef = useRef<string | null>(sessionStorage.getItem('red10_myName'));
   const gameViewRef = useRef<ClientGameView | null>(null);
   const logIdRef = useRef(0);
 
@@ -129,15 +130,22 @@ export function useSocket(): UseSocketReturn {
       setIsConnected(true);
       setMySocketId(socket.id ?? null);
 
-      // Attempt rejoin if we have stored room info
+      // Attempt rejoin if we have stored room info (survives HMR/page reload)
       const storedRoomId = roomIdRef.current;
       const storedName = myNameRef.current;
-      if (storedRoomId && storedName && gameViewRef.current) {
+      if (storedRoomId && storedName) {
+        // Reset player list — server will send fresh data via room:player_joined events
+        playersRef.current = [];
         socket.emit('room:rejoin' as any, { roomId: storedRoomId, playerName: storedName }, (res: { success: boolean; error?: string }) => {
           if (res.success) {
             console.log(`Successfully rejoined room ${storedRoomId}`);
+            // Room state will be rebuilt from the room:player_joined events the server sends
           } else {
-            console.log(`Rejoin failed: ${res.error}`);
+            console.log(`Rejoin failed: ${res.error}, clearing stored room`);
+            sessionStorage.removeItem('red10_roomId');
+            sessionStorage.removeItem('red10_myName');
+            roomIdRef.current = null;
+            myNameRef.current = null;
           }
         });
       }
@@ -312,6 +320,8 @@ export function useSocket(): UseSocketReturn {
 
     socket.emit('room:create', { playerName: name }, (res) => {
       roomIdRef.current = res.roomId;
+      sessionStorage.setItem('red10_roomId', res.roomId);
+      sessionStorage.setItem('red10_myName', name);
       hostIdRef.current = socket.id!; // Creator is always the host
       playersRef.current = [
         {
@@ -337,6 +347,8 @@ export function useSocket(): UseSocketReturn {
     socket.emit('room:join', { roomId: roomId.toUpperCase(), playerName: name }, (res) => {
       if (res.success) {
         roomIdRef.current = roomId.toUpperCase();
+        sessionStorage.setItem('red10_roomId', roomId.toUpperCase());
+        sessionStorage.setItem('red10_myName', name);
         // The player list will be built up from room:player_joined events
         // We add ourselves initially
         if (!playersRef.current.find((p) => p.id === socket.id)) {

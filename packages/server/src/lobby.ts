@@ -210,6 +210,15 @@ export function handleReconnect(
   playerRoomMap.delete(oldSocketId);
   playerRoomMap.set(newSocketId, roomId);
 
+  // If the current host is a bot, transfer host back to this human player
+  if (room.hostId.startsWith('bot-')) {
+    room.hostId = newSocketId;
+  }
+  // Also reclaim host if this player was the original host (hostId matches old socket)
+  if (room.hostId === oldSocketId) {
+    room.hostId = newSocketId;
+  }
+
   return { room, player };
 }
 

@@ -18,6 +18,10 @@ const SUIT_ORDER: Record<string, number> = {
   spades: 5,
 };
 
+/**
+ * Sort cards by rank first (ascending: 3 → 2), then by suit within same rank.
+ * This naturally groups cards of the same rank together.
+ */
 function sortCards(cards: CardType[]): CardType[] {
   return [...cards].sort((a, b) => {
     const rankDiff = RANK_ORDER[a.rank] - RANK_ORDER[b.rank];
@@ -26,50 +30,82 @@ function sortCards(cards: CardType[]): CardType[] {
   });
 }
 
+/**
+ * Group sorted cards into rank clusters for visual spacing.
+ * Returns array of groups, where each group is cards of the same rank.
+ */
+function groupByRank(sorted: CardType[]): CardType[][] {
+  const groups: CardType[][] = [];
+  let currentGroup: CardType[] = [];
+
+  for (const card of sorted) {
+    if (currentGroup.length > 0 && currentGroup[0].rank !== card.rank) {
+      groups.push(currentGroup);
+      currentGroup = [];
+    }
+    currentGroup.push(card);
+  }
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
 function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   const sorted = sortCards(cards);
+  const groups = groupByRank(sorted);
   const selectedIds = new Set(selectedCards.map((c) => c.id));
 
-  // Calculate overlap based on card count for mobile
-  const overlapMobile = cards.length > 10 ? -18 : -14;
-  const overlapDesktop = -20;
+  // Calculate card overlap within a rank group (tighter) and between groups (gap)
+  const withinGroupOverlap = cards.length > 10 ? -16 : -12;
+  const groupGap = 8; // pixels between rank groups
+
+  let globalIndex = 0;
 
   return (
-    <div className="flex justify-center items-end pb-2 px-2 sm:px-0">
-      <div className="flex" style={{ gap: '0px' }}>
-        {sorted.map((card, index) => (
+    <div className="flex justify-center items-end pb-3 px-2 overflow-x-auto">
+      <div className="flex items-end">
+        {groups.map((group, groupIdx) => (
           <div
-            key={card.id}
-            className="transition-transform duration-150 hover:scale-110 hover:-translate-y-1 hover:z-50"
-            style={{
-              marginLeft: index === 0 ? 0 : undefined,
-              zIndex: index,
-            }}
+            key={group[0].rank + '-' + groupIdx}
+            className="flex items-end"
+            style={{ marginLeft: groupIdx === 0 ? 0 : `${groupGap}px` }}
           >
-            {/* Desktop card */}
-            <div
-              className="hidden sm:block"
-              style={{ marginLeft: index === 0 ? 0 : `${overlapDesktop}px` }}
-            >
-              <Card
-                card={card}
-                selected={selectedIds.has(card.id)}
-                onClick={() => onToggleCard(card)}
-                size="md"
-              />
-            </div>
-            {/* Mobile card */}
-            <div
-              className="sm:hidden"
-              style={{ marginLeft: index === 0 ? 0 : `${overlapMobile}px` }}
-            >
-              <Card
-                card={card}
-                selected={selectedIds.has(card.id)}
-                onClick={() => onToggleCard(card)}
-                size="sm"
-              />
-            </div>
+            {group.map((card, cardIdx) => {
+              const idx = globalIndex++;
+              return (
+                <div
+                  key={card.id}
+                  className="transition-all duration-150 hover:-translate-y-2 hover:z-50"
+                  style={{
+                    marginLeft: cardIdx === 0 ? 0 : `${withinGroupOverlap}px`,
+                    zIndex: idx,
+                  }}
+                >
+                  <Card
+                    card={card}
+                    selected={selectedIds.has(card.id)}
+                    onClick={() => onToggleCard(card)}
+                    size="xl"
+                  />
+                </div>
+              );
+            })}
+
+            {/* Rank count badge for multiples */}
+            {group.length >= 2 && (
+              <div
+                className={`relative -ml-3 mb-1 z-50 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
+                  group.length >= 3
+                    ? 'bg-amber-500 text-black'  // Bomb-worthy
+                    : 'bg-green-600/80 text-white'  // Pair
+                }`}
+                title={group.length >= 3 ? `${group.length}× bomb!` : `${group.length}× pair`}
+              >
+                {group.length}
+              </div>
+            )}
           </div>
         ))}
       </div>

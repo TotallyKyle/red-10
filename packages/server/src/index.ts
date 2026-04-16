@@ -505,6 +505,15 @@ io.on('connection', (socket) => {
       socket.emit('game:state', view);
     }
 
+    // Always send the current player list so the client can rebuild lobby state
+    const players = getPlayerList(room);
+    for (const p of players) {
+      socket.emit('room:player_joined', { player: { id: p.id, name: p.name }, hostId: room.hostId });
+      if (p.isReady) {
+        socket.emit('room:player_ready', { playerId: p.id });
+      }
+    }
+
     console.log(`${playerName} (${socket.id}) rejoined room ${normalizedRoomId} (was ${oldSocketId})`);
     cb({ success: true });
   });
