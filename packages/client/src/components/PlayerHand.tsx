@@ -32,7 +32,6 @@ function sortCards(cards: CardType[]): CardType[] {
 
 /**
  * Group sorted cards into rank clusters for visual spacing.
- * Returns array of groups, where each group is cards of the same rank.
  */
 function groupByRank(sorted: CardType[]): CardType[][] {
   const groups: CardType[][] = [];
@@ -52,19 +51,33 @@ function groupByRank(sorted: CardType[]): CardType[][] {
   return groups;
 }
 
+/**
+ * Choose card size and overlap based on card count so the hand fits on screen.
+ */
+function getHandLayout(cardCount: number) {
+  if (cardCount <= 6) {
+    return { size: 'xl' as const, withinOverlap: -10, groupGap: 14 };
+  }
+  if (cardCount <= 9) {
+    return { size: 'lg' as const, withinOverlap: -12, groupGap: 10 };
+  }
+  if (cardCount <= 13) {
+    return { size: 'lg' as const, withinOverlap: -16, groupGap: 8 };
+  }
+  // Shouldn't happen in this game but handle gracefully
+  return { size: 'md' as const, withinOverlap: -18, groupGap: 6 };
+}
+
 function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   const sorted = sortCards(cards);
   const groups = groupByRank(sorted);
   const selectedIds = new Set(selectedCards.map((c) => c.id));
-
-  // Calculate card overlap within a rank group (tighter) and between groups (gap)
-  const withinGroupOverlap = cards.length > 10 ? -16 : -12;
-  const groupGap = 8; // pixels between rank groups
+  const { size, withinOverlap, groupGap } = getHandLayout(cards.length);
 
   let globalIndex = 0;
 
   return (
-    <div className="flex justify-center items-end pb-3 px-2 overflow-x-auto">
+    <div className="flex justify-center items-end pb-3 px-4">
       <div className="flex items-end">
         {groups.map((group, groupIdx) => (
           <div
@@ -79,7 +92,7 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
                   key={card.id}
                   className="transition-all duration-150 hover:-translate-y-2 hover:z-50"
                   style={{
-                    marginLeft: cardIdx === 0 ? 0 : `${withinGroupOverlap}px`,
+                    marginLeft: cardIdx === 0 ? 0 : `${withinOverlap}px`,
                     zIndex: idx,
                   }}
                 >
@@ -87,7 +100,7 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
                     card={card}
                     selected={selectedIds.has(card.id)}
                     onClick={() => onToggleCard(card)}
-                    size="xl"
+                    size={size}
                   />
                 </div>
               );
@@ -98,8 +111,8 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
               <div
                 className={`relative -ml-3 mb-1 z-50 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
                   group.length >= 3
-                    ? 'bg-amber-500 text-black'  // Bomb-worthy
-                    : 'bg-green-600/80 text-white'  // Pair
+                    ? 'bg-amber-500 text-black'
+                    : 'bg-green-600/80 text-white'
                 }`}
                 title={group.length >= 3 ? `${group.length}× bomb!` : `${group.length}× pair`}
               >

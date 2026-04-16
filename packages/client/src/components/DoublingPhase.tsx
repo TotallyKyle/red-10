@@ -215,15 +215,19 @@ function DoublingPhase({
       </div>
 
       {/* Your Hand — proper playing cards with rank grouping */}
-      <div className="w-full max-w-4xl">
+      <div className="w-full">
         <h3 className="text-emerald-300/70 text-xs font-semibold uppercase tracking-wider text-center mb-3">
           Your Hand
         </h3>
-        <div className="flex justify-center items-end overflow-x-auto pb-2">
+        <div className="flex justify-center items-end pb-2 px-4">
           <div className="flex items-end">
             {groups.map((group, groupIdx) => {
-              const withinOverlap = -14;
-              const groupGap = 10;
+              // Scale overlap and gap based on card count so hand always fits
+              const cardCount = sorted.length;
+              const withinOverlap = cardCount > 10 ? -18 : -14;
+              const groupGap = cardCount > 10 ? 6 : 10;
+              // Use 'md' for crowded hands, 'lg' when there's space
+              const cardSize = cardCount > 10 ? 'md' as const : 'lg' as const;
               return (
                 <div
                   key={group[0].rank + '-' + groupIdx}
@@ -247,7 +251,7 @@ function DoublingPhase({
                           card={card}
                           selected={isSelected}
                           onClick={canSelect ? () => handleToggleBombCard(card) : undefined}
-                          size="lg"
+                          size={cardSize}
                         />
                       </div>
                     );
