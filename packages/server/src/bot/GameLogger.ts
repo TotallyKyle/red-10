@@ -1,6 +1,6 @@
 import type { GameEngine } from '../game/GameEngine.js';
 import type { Card } from '@red10/shared';
-import { SUIT_DISPLAY } from '@red10/shared';
+import { SUIT_DISPLAY, RANK_ORDER } from '@red10/shared';
 
 // ---- Types ----
 
@@ -25,8 +25,12 @@ function cardToString(card: Card): string {
   return `${card.rank}${suitSymbol}`;
 }
 
+function sortCardsByRank(cards: Card[]): Card[] {
+  return [...cards].sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+}
+
 function cardsToString(cards: Card[]): string {
-  return cards.map(cardToString).join(' ');
+  return sortCardsByRank(cards).map(cardToString).join(' ');
 }
 
 function formatPlayDescription(cards: Card[], format?: string): string {
@@ -51,9 +55,10 @@ function formatPlayDescription(cards: Card[], format?: string): string {
 
 function getHandSizes(engine: GameEngine): Record<string, number> {
   const state = engine.getState();
+  // Sort by seat index (clockwise order) before building the record
+  const sorted = [...state.players].sort((a, b) => a.seatIndex - b.seatIndex);
   const sizes: Record<string, number> = {};
-  for (const p of state.players) {
-    // Use first initial of name for compact display
+  for (const p of sorted) {
     sizes[p.name] = p.handSize;
   }
   return sizes;
@@ -61,7 +66,8 @@ function getHandSizes(engine: GameEngine): Record<string, number> {
 
 function handSizesCompact(engine: GameEngine): string {
   const state = engine.getState();
-  return state.players
+  return [...state.players]
+    .sort((a, b) => a.seatIndex - b.seatIndex)
     .map(p => `${p.name.charAt(0)}:${p.handSize}`)
     .join(' ');
 }

@@ -247,14 +247,20 @@ export interface GameLogEntryData {
 }
 
 export interface ClientToServerEvents {
-  'room:create': (data: { playerName: string }, cb: (res: { roomId: string }) => void) => void;
-  'room:join': (data: { roomId: string; playerName: string }, cb: (res: { success: boolean; error?: string }) => void) => void;
+  'room:create': (
+    data: { playerName: string },
+    cb: (res: { success: boolean; error?: string; roomId?: string; reconnectToken?: string }) => void,
+  ) => void;
+  'room:join': (
+    data: { roomId: string; playerName: string },
+    cb: (res: { success: boolean; error?: string; reconnectToken?: string }) => void,
+  ) => void;
   'room:ready': () => void;
   'room:start': () => void;
   'room:fill_bots': (cb: (res: { success: boolean; error?: string }) => void) => void;
   'double:declare': (data: { bombCards?: Card[] }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'double:skip': () => void;
-  'quadruple:declare': (cb: (res: { success: boolean; error?: string }) => void) => void;
+  'quadruple:declare': (data: { bombCards?: Card[] }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'quadruple:skip': () => void;
   'play:cards': (data: { cards: Card[] }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'play:pass': () => void;
@@ -263,6 +269,9 @@ export interface ClientToServerEvents {
   'play:defuse': (data: { cards: Card[] }, cb: (res: { success: boolean; error?: string }) => void) => void;
   'cha:decline': () => void;
   'game:play_again': () => void;
-  'room:rejoin': (data: { roomId: string; playerName: string }, cb: (res: { success: boolean; error?: string }) => void) => void;
+  'room:rejoin': (
+    data: { roomId: string; playerName: string; reconnectToken: string },
+    cb: (res: { success: boolean; error?: string; reconnectToken?: string }) => void,
+  ) => void;
   'game:get_log': (cb: (res: { log: string }) => void) => void;
 }

@@ -1,5 +1,11 @@
-import type { RoundInfo, ClientPlayerView, Play } from '@red10/shared';
+import type { RoundInfo, ClientPlayerView, Play, Card as CardType } from '@red10/shared';
+import { RANK_ORDER } from '@red10/shared';
 import Card from './Card.js';
+
+/** Sort cards by rank for display (low to high) */
+function sortByRank(cards: CardType[]): CardType[] {
+  return [...cards].sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+}
 
 interface PlayAreaProps {
   round: RoundInfo | null;
@@ -76,7 +82,7 @@ function PlayArea({ round, players }: PlayAreaProps) {
         <div className="flex flex-col items-center gap-1 opacity-40 scale-90">
           {olderPlays.map((play, idx) => (
             <div key={`old-${idx}`} className="flex items-center gap-0.5">
-              {play.cards.map((card) => (
+              {sortByRank(play.cards).map((card) => (
                 <Card key={card.id} card={card} size="sm" />
               ))}
             </div>
@@ -86,7 +92,7 @@ function PlayArea({ round, players }: PlayAreaProps) {
 
       {/* Current play / main area */}
       <div
-        className={`min-w-[100px] sm:min-w-[140px] min-h-[60px] sm:min-h-[80px] rounded-xl border-2 border-dashed flex items-center justify-center px-2 sm:px-4 py-2 transition-all duration-300 ${
+        className={`min-w-[160px] sm:min-w-[220px] min-h-[100px] sm:min-h-[130px] rounded-xl border-2 border-dashed flex items-center justify-center px-3 sm:px-5 py-3 transition-all duration-300 ${
           currentPlay && isBombPlay(currentPlay)
             ? isRedTenBomb(currentPlay)
               ? 'border-red-500/80 bg-red-900/20 shadow-lg shadow-red-500/30'
@@ -95,9 +101,9 @@ function PlayArea({ round, players }: PlayAreaProps) {
         }`}
       >
         {lastPlay ? (
-          <div className="flex items-center gap-0.5 sm:gap-1 animate-slide-in">
-            {lastPlay.cards.map((card) => (
-              <Card key={card.id} card={card} size="sm" />
+          <div className="flex items-center gap-1 sm:gap-1.5 animate-slide-in">
+            {sortByRank(lastPlay.cards).map((card) => (
+              <Card key={card.id} card={card} size="lg" />
             ))}
           </div>
         ) : (

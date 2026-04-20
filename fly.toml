@@ -1,0 +1,29 @@
+# Fly.io app configuration for Red 10.
+# Initialize once with: fly launch --no-deploy (or copy this and set app name)
+# Deploy with:          fly deploy
+
+app = "red-10"
+primary_region = "sjc"  # change to a region near you — see `fly platform regions`
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  SERVE_CLIENT = "true"
+  # CORS_ORIGIN is only needed if you host the client elsewhere. When
+  # SERVE_CLIENT=true, the client is same-origin and CORS isn't consulted.
+  # CORS_ORIGIN = "https://red10.vercel.app"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

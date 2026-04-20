@@ -1,6 +1,8 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import type { ServerToClientEvents, ClientToServerEvents } from '@red10/shared';
 import {
   createRoom,
@@ -9,10 +11,11 @@ import {
   startGame,
   handleDisconnect,
   handleReconnect,
-  findDisconnectedPlayer,
+  findDisconnectedPlayerForRejoin,
   getPlayerList,
   getRoomForSocket,
   addBotToRoom,
+  validatePlayerName,
 } from './lobby.js';
 import type { Room } from './lobby.js';
 import { GameEngine } from './game/GameEngine.js';
@@ -35,8 +38,8 @@ const gameLoggers = new Map<string, GameLogger>();
 const botTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
 
 const TURN_TIMEOUT_MS = 30_000;
-const BOT_ACTION_DELAY = 500;
-const BOT_CHA_DELAY = 300;
+const BOT_ACTION_DELAY = 2000;
+const BOT_CHA_DELAY = 1500;
 
 /** Broadcast game state to all human players in the room (skips bots). */
 function broadcastState(roomId: string, room: Room, engine: GameEngine) {
@@ -185,7 +188,7 @@ function executeBotAction(roomId: string, botId: string, engine: GameEngine, roo
         break;
       }
       case 'quadruple': {
-        const result = engine.declareQuadruple(botId);
+        const result = engine.declareQuadruple(botId, action.bombCards);
         if (!result.success) break;
         if (logger) {
           logger.logDoubling(engine, botId, 'quadruple');
@@ -461,10 +464,29 @@ import { getRoom } from './lobby.js';
 const app = express();
 const httpServer = createServer(app);
 
+/**
+ * CORS origins for Socket.IO.
+ *
+ * - If `CORS_ORIGIN` env var is set, use it (comma-separated for multiple
+ *   origins, or `*` to allow all — handy for quickly sharing with friends).
+ * - Otherwise default to the local Vite dev server.
+ *
+ * Examples:
+ *   CORS_ORIGIN=https://red10.vercel.app
+ *   CORS_ORIGIN=https://red10.vercel.app,https://red10-git-main-you.vercel.app
+ *   CORS_ORIGIN=*
+ */
+const corsEnv = process.env.CORS_ORIGIN?.trim();
+const corsOrigin: string | string[] =
+  !corsEnv || corsEnv === '*'
+    ? (corsEnv === '*' ? '*' : 'http://localhost:5173')
+    : corsEnv.split(',').map((s) => s.trim()).filter(Boolean);
+
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {
-    origin: 'http://localhost:5173',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
+    credentials: false,
   },
 });
 
@@ -472,27 +494,65 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+/**
+ * In production, optionally serve the built client from the server. This lets
+ * you host both halves on a single WebSocket-friendly platform (Fly.io,
+ * Render, Railway, etc.) with one URL and no CORS to worry about.
+ *
+ * Enable by setting `SERVE_CLIENT=true` and ensuring the client build output
+ * exists at `packages/client/dist` (i.e. run `npm run build` at the repo root).
+ */
+if (process.env.SERVE_CLIENT === 'true') {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  // dist is compiled from src — so in prod we're at packages/server/dist and
+  // the client build lives at packages/client/dist (../../client/dist).
+  const clientDist = path.resolve(__dirname, '../../client/dist');
+  app.use(express.static(clientDist));
+  // SPA fallback: any non-API route returns index.html so client-side routing works.
+  app.get(/^(?!\/(?:health|socket\.io)).*/, (_req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+  console.log(`Serving static client from ${clientDist}`);
+}
+
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
   // ---- Reconnection ----
   socket.on('room:rejoin', (data, cb) => {
-    const { roomId, playerName } = data;
+    // Validate shape defensively — `data` comes straight off the socket.
+    if (!data || typeof data !== 'object') {
+      cb({ success: false, error: 'Invalid rejoin request' });
+      return;
+    }
+    const { roomId, playerName, reconnectToken } = data as {
+      roomId?: unknown;
+      playerName?: unknown;
+      reconnectToken?: unknown;
+    };
+    if (typeof roomId !== 'string' || typeof playerName !== 'string') {
+      cb({ success: false, error: 'Invalid rejoin request' });
+      return;
+    }
     const normalizedRoomId = roomId.toUpperCase();
 
-    const found = findDisconnectedPlayer(normalizedRoomId, playerName);
+    // Any auth failure (no such room, no such disconnected slot, bad token)
+    // collapses into the same generic error so an attacker can't distinguish
+    // them by response content.
+    const found = findDisconnectedPlayerForRejoin(normalizedRoomId, playerName, reconnectToken);
     if (!found) {
-      cb({ success: false, error: 'No disconnected player found with that name in this room' });
+      cb({ success: false, error: 'Could not reconnect: invalid session or expired' });
       return;
     }
 
     const { room, oldSocketId } = found;
     const reconnectResult = handleReconnect(oldSocketId, socket.id!, normalizedRoomId);
     if (!reconnectResult) {
-      cb({ success: false, error: 'Reconnection failed' });
+      cb({ success: false, error: 'Could not reconnect: invalid session or expired' });
       return;
     }
+    const { player: rejoinedPlayer } = reconnectResult;
 
     void socket.join(normalizedRoomId);
 
@@ -515,32 +575,46 @@ io.on('connection', (socket) => {
     }
 
     console.log(`${playerName} (${socket.id}) rejoined room ${normalizedRoomId} (was ${oldSocketId})`);
-    cb({ success: true });
+    // Hand back the rotated token so the client persists the new one.
+    cb({ success: true, reconnectToken: rejoinedPlayer.reconnectToken });
   });
 
   socket.on('room:create', (data, cb) => {
-    const { playerName } = data;
-    if (!playerName.trim()) {
-      socket.emit('error', { message: 'Name cannot be empty', code: 'INVALID_NAME' });
+    const nameCheck = validatePlayerName(data?.playerName);
+    if (!nameCheck.ok) {
+      cb({ success: false, error: nameCheck.error });
       return;
     }
+    const playerName = nameCheck.name;
 
     const room = createRoom(socket.id, playerName);
     void socket.join(room.id);
+    // The creator is the only player so far — safe to pull their token.
+    const creator = room.players.get(socket.id)!;
     console.log(`Room ${room.id} created by ${playerName} (${socket.id})`);
-    cb({ roomId: room.id });
+    cb({ success: true, roomId: room.id, reconnectToken: creator.reconnectToken });
   });
 
   socket.on('room:join', (data, cb) => {
-    const { roomId, playerName } = data;
-    const result = joinRoom(roomId.toUpperCase(), socket.id, playerName);
+    if (!data || typeof data !== 'object' || typeof data.roomId !== 'string') {
+      cb({ success: false, error: 'Invalid join request' });
+      return;
+    }
+    const nameCheck = validatePlayerName(data.playerName);
+    if (!nameCheck.ok) {
+      cb({ success: false, error: nameCheck.error });
+      return;
+    }
+    const playerName = nameCheck.name;
+
+    const result = joinRoom(data.roomId.toUpperCase(), socket.id, playerName);
 
     if (!result.success) {
       cb({ success: false, error: result.error });
       return;
     }
 
-    const { room } = result;
+    const { room, player } = result;
     void socket.join(room.id);
 
     // Send the existing player list to the new joiner so they know who's already here
@@ -562,7 +636,7 @@ io.on('connection', (socket) => {
     });
 
     console.log(`${playerName} (${socket.id}) joined room ${room.id}`);
-    cb({ success: true });
+    cb({ success: true, reconnectToken: player.reconnectToken });
   });
 
   socket.on('room:ready', () => {
@@ -748,7 +822,7 @@ io.on('connection', (socket) => {
     scheduleBotAction(room.id);
   });
 
-  socket.on('quadruple:declare', (cb) => {
+  socket.on('quadruple:declare', (data, cb) => {
     const room = getRoomForSocket(socket.id);
     if (!room) {
       cb({ success: false, error: 'Not in a room' });
@@ -761,7 +835,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const result = engine.declareQuadruple(socket.id);
+    const result = engine.declareQuadruple(socket.id, data?.bombCards);
     if (!result.success) {
       cb({ success: false, error: result.error });
       return;
@@ -1174,8 +1248,13 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT ?? 3001;
+const PORT = Number(process.env.PORT ?? 3001);
+// Bind to 0.0.0.0 in production so container platforms (Fly, Render, Docker)
+// can route traffic into the process. Locally we still listen on all ifaces —
+// it's harmless and matches what `vite` does.
+const HOST = process.env.HOST ?? '0.0.0.0';
 
-httpServer.listen(PORT, () => {
-  console.log(`Red 10 server running on http://localhost:${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+  console.log(`Red 10 server running on http://${HOST}:${PORT}`);
+  console.log(`CORS origin: ${JSON.stringify(corsOrigin)}`);
 });

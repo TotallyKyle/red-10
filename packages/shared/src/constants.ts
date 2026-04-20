@@ -37,6 +37,10 @@ export const COPIES_PER_RANK = 6; // Each rank has 6 copies across all suits
 // Cha-go opportunity timeout in milliseconds
 export const CHA_GO_TIMEOUT_MS = 10_000;
 
+// Max length of a user-supplied display name. Kept server-side as well to
+// prevent memory/bandwidth amplification on broadcast.
+export const MAX_NAME_LENGTH = 32;
+
 // Rank display names (for UI)
 export const RANK_DISPLAY: Record<string, string> = {
   '3': '3', '4': '4', '5': '5', '6': '6', '7': '7',

@@ -182,7 +182,11 @@ export class GameSimulator {
           result = engine.declareDouble(bidderId, decision.bombCards);
           if (result.success) stats.doublesOccurred++;
         } else if (decision.action === 'quadruple' && validActions.includes('quadruple')) {
-          result = engine.declareQuadruple(bidderId);
+          result = engine.declareQuadruple(bidderId, (decision as { action: 'quadruple'; bombCards?: Card[] }).bombCards);
+          // If quadruple failed (e.g., black10 without bombs), fall back to skip
+          if (!result.success) {
+            result = engine.skipQuadruple(bidderId);
+          }
         } else {
           // skip
           if (validActions.includes('skip_double')) {

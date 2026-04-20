@@ -1,15 +1,48 @@
+import { useState, useEffect, useCallback } from 'react';
 import type { ClientGameView, GameResult, Team } from '@red10/shared';
 
 interface ScoreBoardProps {
   gameView: ClientGameView;
   mySocketId: string;
   onPlayAgain: () => void;
+  onRequestLog?: () => void;
+  gameLogText?: string | null;
 }
 
-function ScoreBoard({ gameView, mySocketId, onPlayAgain }: ScoreBoardProps) {
+function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogText }: ScoreBoardProps) {
   const result = gameView.gameResult;
   const totalPlayers = gameView.players.length;
   const playAgainCount = gameView.playAgainCount ?? 0;
+  const [logRequested, setLogRequested] = useState(false);
+
+  const handleDownloadLog = useCallback(() => {
+    if (gameLogText) {
+      const blob = new Blob([gameLogText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `red10-game-log-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } else if (onRequestLog && !logRequested) {
+      setLogRequested(true);
+      onRequestLog();
+    }
+  }, [gameLogText, onRequestLog, logRequested]);
+
+  // Auto-download once log text arrives after request
+  useEffect(() => {
+    if (logRequested && gameLogText) {
+      const blob = new Blob([gameLogText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `red10-game-log-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setLogRequested(false);
+    }
+  }, [gameLogText, logRequested]);
 
   // Group players by team
   const red10Team = gameView.players.filter((p) => p.team === 'red10');
@@ -125,15 +158,27 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain }: ScoreBoardProps) {
           </div>
         )}
 
-        {/* Play Again */}
-        <div className="text-center">
-          <button
-            onClick={onPlayAgain}
-            className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors"
-          >
-            Play Again
-          </button>
-          <div className="text-gray-400 text-sm mt-2">
+        {/* Actions */}
+        <div className="text-center space-y-3">
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={onPlayAgain}
+              className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors"
+            >
+              Play Again
+            </button>
+            <button
+              onClick={handleDownloadLog}
+              className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors flex items-center gap-2"
+              title="Download game log"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Log
+            </button>
+          </div>
+          <div className="text-gray-400 text-sm">
             {playAgainCount}/{totalPlayers} ready
           </div>
         </div>

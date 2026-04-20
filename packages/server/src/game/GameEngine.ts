@@ -253,7 +253,7 @@ export class GameEngine {
   /**
    * Opposing team declares quadruple in response to a double.
    */
-  declareQuadruple(playerId: string): { success: boolean; error?: string } {
+  declareQuadruple(playerId: string, bombCards?: Card[]): { success: boolean; error?: string } {
     if (this.state.phase !== 'doubling' || !this.state.doubling) {
       return { success: false, error: 'Not in doubling phase' };
     }
@@ -276,6 +276,31 @@ export class GameEngine {
     if (player.team === doubling.doublerTeam) {
       return { success: false, error: 'Only the opposing team can quadruple' };
     }
+
+    if (player.team === 'black10') {
+      // Black 10 team must reveal a bomb to quadruple
+      if (!bombCards || bombCards.length === 0) {
+        return { success: false, error: 'Black 10 team must reveal a bomb to quadruple' };
+      }
+
+      const handIds = new Set(player.hand.map((c) => c.id));
+      for (const card of bombCards) {
+        if (!handIds.has(card.id)) {
+          return { success: false, error: `Card ${card.id} is not in your hand` };
+        }
+      }
+
+      const bombCardIds = new Set(bombCards.map((c) => c.id));
+      const actualBombCards = player.hand.filter((c) => bombCardIds.has(c.id));
+
+      const bombInfo = classifyBomb(actualBombCards);
+      if (!bombInfo) {
+        return { success: false, error: 'Cards do not form a valid bomb' };
+      }
+
+      doubling.revealedBombs.push({ playerId, cards: actualBombCards });
+    }
+    // Red 10 team: no bomb needed, their red 10s are already revealed from the double
 
     doubling.isQuadrupled = true;
     this.state.stakeMultiplier = 4;
@@ -780,14 +805,14 @@ export class GameEngine {
       const copiesInHand = player.hand.filter((c) => c.rank === triggerRank).length;
 
       if (cg.phase === 'waiting_cha') {
-        // Only eligible players who haven't declined can cha
+        // Only eligible players who haven't declined can cha.
+        // Go-cha is NOT valid here — it requires a prior paired cha (which
+        // transitions the state to waiting_go / waiting_final_cha). A 3-of-a-kind
+        // played as the very first response to a single is not a valid go-cha.
         if (cg.eligiblePlayerIds.includes(playerId) && !cg.declinedPlayerIds.includes(playerId)) {
           const actions: ActionType[] = ['decline_cha'];
           if (copiesInHand >= 2) {
             actions.unshift('cha');
-          }
-          if (copiesInHand >= 3) {
-            actions.unshift('go_cha');
           }
           return actions;
         }
@@ -889,15 +914,41 @@ export class GameEngine {
 
     const validActions = this.getValidActions(playerId);
 
+    // Hide cha-go state during `waiting_cha` from players who are not eligible
+    // to cha. Otherwise, the "Cha-Go: [rank]" indicator would leak the fact
+    // that someone has a pair of that rank — critical hidden information.
+    //
+    // Once a cha is actually played, the cha pair appears in `round.plays` and
+    // cha-go becomes public knowledge, so later phases (waiting_go and
+    // waiting_final_cha) don't need hiding.
+    //
+    // We also advance `currentPlayerId` to the next active player for the
+    // non-eligible view so the UI doesn't get stuck showing the single-player
+    // as the "current turn" indefinitely, which would itself be a tell. And we
+    // force `isMyTurn` to false since the actual game is paused — if the
+    // non-eligible viewer happens to match the virtual next player, they
+    // shouldn't see active-turn UI while cha-go is still resolving.
+    let roundView = this.state.round;
+    let isMyTurnView = isMyTurn;
+    if (
+      roundView?.chaGoState?.phase === 'waiting_cha' &&
+      !roundView.chaGoState.eligiblePlayerIds.includes(playerId)
+    ) {
+      const lastPlayerId = roundView.lastPlay?.playerId ?? roundView.currentPlayerId;
+      const virtualNextPlayer = this.getNextActivePlayer(lastPlayerId);
+      roundView = { ...roundView, chaGoState: null, currentPlayerId: virtualNextPlayer };
+      isMyTurnView = false;
+    }
+
     const view: ClientGameView = {
       gameId: this.state.id,
       phase: this.state.phase,
       myHand: me.hand,
       players: playerViews,
-      round: this.state.round,
+      round: roundView,
       doubling: this.state.doubling,
       stakeMultiplier: this.state.stakeMultiplier,
-      isMyTurn,
+      isMyTurn: isMyTurnView,
       validActions,
       myTeam,
       finishOrder: this.state.finishOrder,
@@ -1198,10 +1249,15 @@ export class GameEngine {
       return { success: false, error: 'Player not found or is out' };
     }
 
-    // Go-cha can happen during any cha-go phase
-    // During waiting_cha / waiting_final_cha: eligible players can go-cha
-    // During waiting_go: the current turn player can go-cha
-    if (cg.phase === 'waiting_cha' || cg.phase === 'waiting_final_cha') {
+    // Go-cha is only valid AFTER a paired cha has been played.
+    // That means the state must already be in waiting_go (someone chas, we go-cha
+    // as the single-player) or waiting_final_cha (someone chas, someone goes,
+    // then we final-go-cha). It is NOT valid in waiting_cha — you must do a
+    // paired cha first, not go-cha a normal single.
+    if (cg.phase === 'waiting_cha') {
+      return { success: false, error: 'Go-cha requires a prior paired cha — cha with a pair first' };
+    }
+    if (cg.phase === 'waiting_final_cha') {
       if (!cg.eligiblePlayerIds.includes(playerId) || cg.declinedPlayerIds.includes(playerId)) {
         return { success: false, error: 'You are not eligible for go-cha' };
       }

@@ -57,14 +57,21 @@ export function calculateScore(state: GameState): GameResult {
     const trappedCount = trapped.length;
     payoutPerTrapped = state.stakeMultiplier * 1;
 
-    // Each trapped player pays payoutPerTrapped to EACH scoring team member
-    for (const trappedId of trapped) {
-      payouts[trappedId] = -(payoutPerTrapped * scoringMembers.length);
+    // Scoring rule: each WINNER receives (stakeMultiplier × trappedCount).
+    // The losing team collectively funds this — total pool is split among losers.
+    // Each winner receives: stakeMultiplier × trappedCount
+    // Total pool: numWinners × stakeMultiplier × trappedCount
+    // Each loser pays: totalPool / numLosers
+    const amountPerWinner = payoutPerTrapped * trappedCount;
+    const totalPool = amountPerWinner * scoringMembers.length;
+    const amountPerLoser = totalPool / opposingMembers.length;
+
+    for (const loser of opposingMembers) {
+      payouts[loser.id] = -amountPerLoser;
     }
 
-    // Each scoring team member receives payoutPerTrapped * trappedCount
     for (const member of scoringMembers) {
-      payouts[member.id] = payoutPerTrapped * trappedCount;
+      payouts[member.id] = amountPerWinner;
     }
   }
 

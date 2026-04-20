@@ -106,17 +106,15 @@ describe('Scoring — calculateScore', () => {
     expect(result.trapped.length).toBe(2);
     expect(result.payoutPerTrapped).toBe(1);
 
-    // Each trapped player pays $1 * 3 (scoring members) = $3
-    expect(result.payouts['p4']).toBe(-3);
-    expect(result.payouts['p5']).toBe(-3);
+    // Each loser pays stakeMultiplier × trappedCount = $1 × 2 = $2
+    expect(result.payouts['p3']).toBe(-2);
+    expect(result.payouts['p4']).toBe(-2);
+    expect(result.payouts['p5']).toBe(-2);
 
-    // Each scoring member receives $1 * 2 (trapped) = $2
+    // Each winner receives stakeMultiplier × trappedCount = $1 × 2 = $2
     expect(result.payouts['p0']).toBe(2);
     expect(result.payouts['p1']).toBe(2);
     expect(result.payouts['p2']).toBe(2);
-
-    // p3 finished before scoring team completed — not trapped
-    expect(result.payouts['p3']).toBe(0);
   });
 
   it('scoring team fails: all opposing finish first', () => {
@@ -160,22 +158,23 @@ describe('Scoring — calculateScore', () => {
     expect(result.trapped.length).toBe(3);
     expect(result.payoutPerTrapped).toBe(2);
 
-    // Each trapped pays $2 * 3 = $6
+    // Each loser pays $2 × 3 trapped = $6
     expect(result.payouts['p3']).toBe(-6);
     expect(result.payouts['p4']).toBe(-6);
     expect(result.payouts['p5']).toBe(-6);
 
-    // Each scoring member receives $2 * 3 = $6
+    // Each winner receives $2 × 3 trapped = $6
     expect(result.payouts['p0']).toBe(6);
     expect(result.payouts['p1']).toBe(6);
     expect(result.payouts['p2']).toBe(6);
   });
 
-  it('quadrupled stakes: multiplier = 4, verify payouts quadrupled', () => {
+  it('quadrupled stakes: multiplier = 4, 1 trapped', () => {
+    // 3v3, x4 stakes, only 1 trapped
     const state = buildGameState({
       teams: ['red10', 'red10', 'red10', 'black10', 'black10', 'black10'],
-      finishOrder: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'],
-      outPlayers: ['p0', 'p1', 'p2'], // p3, p4, p5 trapped
+      finishOrder: ['p0', 'p1', 'p3', 'p4', 'p2', 'p5'],
+      outPlayers: ['p0', 'p1', 'p2', 'p3', 'p4'], // only p5 trapped
       stakeMultiplier: 4,
       scoringTeam: 'red10',
     });
@@ -183,18 +182,23 @@ describe('Scoring — calculateScore', () => {
     const result = calculateScore(state);
 
     expect(result.scoringTeamWon).toBe(true);
+    expect(result.trapped.length).toBe(1);
     expect(result.payoutPerTrapped).toBe(4);
 
-    // Each trapped pays $4 * 3 = $12
-    expect(result.payouts['p3']).toBe(-12);
+    // Each loser pays $4 × 1 trapped = $4
+    expect(result.payouts['p3']).toBe(-4);
+    expect(result.payouts['p4']).toBe(-4);
+    expect(result.payouts['p5']).toBe(-4);
 
-    // Each scoring member receives $4 * 3 = $12
-    expect(result.payouts['p0']).toBe(12);
+    // Each winner receives $4 × 1 trapped = $4
+    expect(result.payouts['p0']).toBe(4);
+    expect(result.payouts['p1']).toBe(4);
+    expect(result.payouts['p2']).toBe(4);
   });
 
-  it('4v2 team composition: red 10 team has 2 members', () => {
+  it('4v2 team composition: small team wins, big team loses (all 4 trapped)', () => {
     // Red 10 team: p0, p1 (2 members, scoring)
-    // Black 10 team: p2, p3, p4, p5 (4 members)
+    // Black 10 team: p2, p3, p4, p5 (4 members, all trapped)
     const state = buildGameState({
       teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
       finishOrder: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'],
@@ -208,18 +212,74 @@ describe('Scoring — calculateScore', () => {
     expect(result.scoringTeamWon).toBe(true);
     expect(result.trapped.length).toBe(4);
 
-    // Each trapped pays $1 * 2 (scoring members) = $2
-    expect(result.payouts['p2']).toBe(-2);
-    expect(result.payouts['p3']).toBe(-2);
-
-    // Each scoring member receives $1 * 4 (trapped) = $4
+    // Each winner receives $1 × 4 trapped = $4
     expect(result.payouts['p0']).toBe(4);
     expect(result.payouts['p1']).toBe(4);
+
+    // Total pool: 2 winners × $4 = $8, split among 4 losers = $2 each
+    expect(result.payouts['p2']).toBe(-2);
+    expect(result.payouts['p3']).toBe(-2);
+    expect(result.payouts['p4']).toBe(-2);
+    expect(result.payouts['p5']).toBe(-2);
   });
 
-  it('5v1 team composition: only 1 red 10 player', () => {
+  it('4v2 team composition: big team wins, small team loses (all 2 trapped)', () => {
+    // Red 10 team: p0, p1 (2 members, all trapped)
+    // Black 10 team: p2, p3, p4, p5 (4 members, scoring)
+    const state = buildGameState({
+      teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
+      finishOrder: ['p2', 'p3', 'p4', 'p5', 'p0', 'p1'],
+      outPlayers: ['p2', 'p3', 'p4', 'p5'], // both red members trapped
+      stakeMultiplier: 1,
+      scoringTeam: 'black10',
+    });
+
+    const result = calculateScore(state);
+
+    expect(result.scoringTeamWon).toBe(true);
+    expect(result.trapped.length).toBe(2);
+
+    // Each winner receives $1 × 2 trapped = $2
+    expect(result.payouts['p2']).toBe(2);
+    expect(result.payouts['p3']).toBe(2);
+    expect(result.payouts['p4']).toBe(2);
+    expect(result.payouts['p5']).toBe(2);
+
+    // Total pool: 4 winners × $2 = $8, split among 2 losers = $4 each
+    expect(result.payouts['p0']).toBe(-4);
+    expect(result.payouts['p1']).toBe(-4);
+  });
+
+  it('4v2 team composition: big team wins, 1 trapped', () => {
+    // Black 10 team: p2, p3, p4, p5 (4 members, scoring)
+    // Red 10 team: p0, p1 (2 members, p0 got out, p1 trapped)
+    const state = buildGameState({
+      teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
+      finishOrder: ['p2', 'p0', 'p3', 'p4', 'p5', 'p1'],
+      outPlayers: ['p2', 'p3', 'p4', 'p5', 'p0'], // only p1 trapped
+      stakeMultiplier: 1,
+      scoringTeam: 'black10',
+    });
+
+    const result = calculateScore(state);
+
+    expect(result.scoringTeamWon).toBe(true);
+    expect(result.trapped.length).toBe(1);
+
+    // Each winner receives $1 × 1 trapped = $1
+    expect(result.payouts['p2']).toBe(1);
+    expect(result.payouts['p3']).toBe(1);
+    expect(result.payouts['p4']).toBe(1);
+    expect(result.payouts['p5']).toBe(1);
+
+    // Total pool: 4 winners × $1 = $4, split among 2 losers = $2 each
+    expect(result.payouts['p0']).toBe(-2);
+    expect(result.payouts['p1']).toBe(-2);
+  });
+
+  it('5v1 team composition: only 1 red 10 player wins', () => {
     // Red 10 team: p0 (1 member, scoring)
-    // Black 10 team: p1, p2, p3, p4, p5 (5 members)
+    // Black 10 team: p1, p2, p3, p4, p5 (5 members, all trapped)
     const state = buildGameState({
       teams: ['red10', 'black10', 'black10', 'black10', 'black10', 'black10'],
       finishOrder: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'],
@@ -233,11 +293,39 @@ describe('Scoring — calculateScore', () => {
     expect(result.scoringTeamWon).toBe(true);
     expect(result.trapped.length).toBe(5);
 
-    // Each trapped pays $1 * 1 = $1
-    expect(result.payouts['p1']).toBe(-1);
-
-    // The single scoring member receives $1 * 5 = $5
+    // Each winner receives $1 × 5 trapped = $5
     expect(result.payouts['p0']).toBe(5);
+
+    // Total pool: 1 winner × $5 = $5, split among 5 losers = $1 each
+    expect(result.payouts['p1']).toBe(-1);
+    expect(result.payouts['p2']).toBe(-1);
+    expect(result.payouts['p3']).toBe(-1);
+    expect(result.payouts['p4']).toBe(-1);
+    expect(result.payouts['p5']).toBe(-1);
+  });
+
+  it('5v1 team composition: big team wins, 1 player trapped', () => {
+    // Black 10 team: p1, p2, p3, p4, p5 (5 members, scoring)
+    // Red 10 team: p0 (1 member, trapped)
+    const state = buildGameState({
+      teams: ['red10', 'black10', 'black10', 'black10', 'black10', 'black10'],
+      finishOrder: ['p1', 'p2', 'p3', 'p4', 'p5', 'p0'],
+      outPlayers: ['p1', 'p2', 'p3', 'p4', 'p5'], // p0 trapped
+      stakeMultiplier: 1,
+      scoringTeam: 'black10',
+    });
+
+    const result = calculateScore(state);
+
+    expect(result.scoringTeamWon).toBe(true);
+    expect(result.trapped.length).toBe(1);
+
+    // Each winner receives $1 × 1 trapped = $1
+    expect(result.payouts['p1']).toBe(1);
+    expect(result.payouts['p5']).toBe(1);
+
+    // Total pool: 5 winners × $1 = $5, split among 1 loser = $5
+    expect(result.payouts['p0']).toBe(-5);
   });
 
   it('all trapped: none of opposing team finished', () => {
@@ -275,9 +363,9 @@ describe('Scoring — calculateScore', () => {
     expect(result.trapped.length).toBe(3);
     expect(result.trapped).toEqual(expect.arrayContaining(['p0', 'p1', 'p2']));
 
-    // Each trapped red10 member pays $1 * 3 = $3
+    // Each loser pays $1 × 3 trapped = $3
     expect(result.payouts['p0']).toBe(-3);
-    // Each black10 member receives $1 * 3 = $3
+    // Total pool: 3 losers × $3 = $9, split among 3 winners = $3 each
     expect(result.payouts['p3']).toBe(3);
   });
 });

@@ -15,6 +15,7 @@
     "test:server": "npm run test -w packages/server"
   },
   "devDependencies": {
+    "@rollup/rollup-darwin-arm64": "^4.60.2",
     "concurrently": "^9.1.2",
     "typescript": "^5.7.3"
   }

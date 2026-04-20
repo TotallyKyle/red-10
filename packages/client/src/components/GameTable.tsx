@@ -29,26 +29,42 @@ interface GameTableProps {
  * Position definitions for 5 other players around the table.
  * Index 0 = directly across (top-center), then clockwise.
  */
+/**
+ * Seat positions for 5 other players around a table, clockwise from the
+ * bottom-center player's perspective.
+ *
+ * Physical table layout (clockwise from "Me"):
+ *
+ *              Seat +3 (across, top center)
+ *   Seat +2                       Seat +4
+ *  (top left)                    (top right)
+ *   Seat +1                       Seat +5
+ * (bottom left)                (bottom right)
+ *              Me (bottom center)
+ *
+ * Index 0 = next player clockwise (to my left)
+ * Index 4 = player just before me (to my right)
+ */
 const POSITIONS = [
-  // top center
-  { top: '4%', left: '50%', transform: 'translateX(-50%)' },
-  // top right
-  { top: '18%', right: '4%' },
-  // bottom right
-  { bottom: '28%', right: '4%' },
-  // bottom left
+  // Seat +1: bottom left (next player clockwise)
   { bottom: '28%', left: '4%' },
-  // top left
+  // Seat +2: top left
   { top: '18%', left: '4%' },
+  // Seat +3: top center (across)
+  { top: '4%', left: '50%', transform: 'translateX(-50%)' },
+  // Seat +4: top right
+  { top: '18%', right: '4%' },
+  // Seat +5: bottom right (player just before me)
+  { bottom: '28%', right: '4%' },
 ] as const;
 
-/** Mobile positions: tighter layout for small screens */
+/** Mobile positions: tighter layout, same clockwise order */
 const MOBILE_POSITIONS = [
+  { bottom: '30%', left: '2%' },
+  { top: '15%', left: '2%' },
   { top: '2%', left: '50%', transform: 'translateX(-50%)' },
   { top: '15%', right: '2%' },
   { bottom: '30%', right: '2%' },
-  { bottom: '30%', left: '2%' },
-  { top: '15%', left: '2%' },
 ] as const;
 
 function GameTable({

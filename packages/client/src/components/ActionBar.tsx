@@ -73,6 +73,24 @@ function validateSelectedCards(
     return { isValid: false, reason: null };
   }
 
+  // During cha-go waiting_go: must play exactly 1 card of the trigger rank
+  if (round?.chaGoState?.phase === 'waiting_go') {
+    const triggerRank = round.chaGoState.triggerRank;
+    if (selectedCards.length === 1 && selectedCards[0].rank === triggerRank) {
+      return { isValid: true, reason: null };
+    }
+    return { isValid: false, reason: `Must play a single ${triggerRank}` };
+  }
+
+  // During cha-go waiting_final_cha: must play a pair of the trigger rank
+  if (round?.chaGoState?.phase === 'waiting_final_cha') {
+    const triggerRank = round.chaGoState.triggerRank;
+    if (selectedCards.length === 2 && selectedCards.every(c => c.rank === triggerRank)) {
+      return { isValid: true, reason: null };
+    }
+    return { isValid: false, reason: `Must play a pair of ${triggerRank}s` };
+  }
+
   const format = detectFormat(selectedCards);
   if (!format) {
     return { isValid: false, reason: 'Cards do not form a valid combination' };

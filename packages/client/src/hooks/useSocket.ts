@@ -48,8 +48,8 @@ export interface UseSocketReturn {
   declareQuadruple: () => void;
   skipQuadrupleAction: () => void;
   playAgain: () => void;
-  getGameLog: () => void;
-  gameLogText: string | null;
+  /** Fetch the current game log from the server and trigger a download. */
+  downloadGameLog: () => void;
   mySocketId: string | null;
   turnStartTime: number | null;
 }
@@ -82,16 +82,36 @@ export function useSocket(): UseSocketReturn {
   const [mySocketId, setMySocketId] = useState<string | null>(null);
   const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
-  const [gameLogText, setGameLogText] = useState<string | null>(null);
 
   // Track players and ready states locally since server sends incremental events
   const playersRef = useRef<RoomPlayer[]>([]);
-  // Persist room/name in sessionStorage so we survive HMR and page reloads
+  // Persist room/name/reconnectToken in sessionStorage so we survive HMR and
+  // page reloads. The token is a per-player secret issued by the server on
+  // join/create; without it, rejoin is rejected even if you know the name.
   const roomIdRef = useRef<string | null>(sessionStorage.getItem('red10_roomId'));
   const hostIdRef = useRef<string | null>(null);
   const myNameRef = useRef<string | null>(sessionStorage.getItem('red10_myName'));
+  const reconnectTokenRef = useRef<string | null>(sessionStorage.getItem('red10_reconnectToken'));
   const gameViewRef = useRef<ClientGameView | null>(null);
   const logIdRef = useRef(0);
+
+  const clearStoredSession = useCallback(() => {
+    sessionStorage.removeItem('red10_roomId');
+    sessionStorage.removeItem('red10_myName');
+    sessionStorage.removeItem('red10_reconnectToken');
+    roomIdRef.current = null;
+    myNameRef.current = null;
+    reconnectTokenRef.current = null;
+  }, []);
+
+  const storeSession = useCallback((roomId: string, name: string, token: string) => {
+    sessionStorage.setItem('red10_roomId', roomId);
+    sessionStorage.setItem('red10_myName', name);
+    sessionStorage.setItem('red10_reconnectToken', token);
+    roomIdRef.current = roomId;
+    myNameRef.current = name;
+    reconnectTokenRef.current = token;
+  }, []);
 
   // Keep gameViewRef in sync
   useEffect(() => {
@@ -119,10 +139,16 @@ export function useSocket(): UseSocketReturn {
   }, []);
 
   useEffect(() => {
-    const socket: TypedSocket = io({
-      autoConnect: true,
-      reconnection: true,
-    });
+    // Socket.IO target URL resolution:
+    //   - If `VITE_API_URL` is set at build time, connect to that explicit URL.
+    //     Use this when the client is deployed separately from the server
+    //     (e.g., client on Vercel, server on Fly.io).
+    //   - Otherwise, connect to the page's own origin (same-host deploy or
+    //     Vite's dev-time proxy for /socket.io).
+    const apiUrl = import.meta.env.VITE_API_URL as string | undefined;
+    const socket: TypedSocket = apiUrl
+      ? io(apiUrl, { autoConnect: true, reconnection: true, transports: ['websocket', 'polling'] })
+      : io({ autoConnect: true, reconnection: true });
 
     socketRef.current = socket;
 
@@ -130,24 +156,36 @@ export function useSocket(): UseSocketReturn {
       setIsConnected(true);
       setMySocketId(socket.id ?? null);
 
-      // Attempt rejoin if we have stored room info (survives HMR/page reload)
+      // Attempt rejoin if we have stored room info (survives HMR/page reload).
+      // We ONLY attempt a rejoin when we also have the per-player reconnect
+      // token — without it, the server will reject us (and should).
       const storedRoomId = roomIdRef.current;
       const storedName = myNameRef.current;
-      if (storedRoomId && storedName) {
+      const storedToken = reconnectTokenRef.current;
+      if (storedRoomId && storedName && storedToken) {
         // Reset player list — server will send fresh data via room:player_joined events
         playersRef.current = [];
-        socket.emit('room:rejoin' as any, { roomId: storedRoomId, playerName: storedName }, (res: { success: boolean; error?: string }) => {
-          if (res.success) {
-            console.log(`Successfully rejoined room ${storedRoomId}`);
-            // Room state will be rebuilt from the room:player_joined events the server sends
-          } else {
-            console.log(`Rejoin failed: ${res.error}, clearing stored room`);
-            sessionStorage.removeItem('red10_roomId');
-            sessionStorage.removeItem('red10_myName');
-            roomIdRef.current = null;
-            myNameRef.current = null;
-          }
-        });
+        socket.emit(
+          'room:rejoin',
+          { roomId: storedRoomId, playerName: storedName, reconnectToken: storedToken },
+          (res) => {
+            if (res.success) {
+              console.log(`Successfully rejoined room ${storedRoomId}`);
+              // Server rotated the token on successful rejoin. Persist the new one
+              // so a subsequent reload works and a stale token can't be replayed.
+              if (res.reconnectToken) {
+                sessionStorage.setItem('red10_reconnectToken', res.reconnectToken);
+                reconnectTokenRef.current = res.reconnectToken;
+              }
+            } else {
+              console.log(`Rejoin failed: ${res.error}, clearing stored room`);
+              clearStoredSession();
+            }
+          },
+        );
+      } else if (storedRoomId || storedName || storedToken) {
+        // Inconsistent stored state (missing token) — clear everything.
+        clearStoredSession();
       }
     });
 
@@ -315,13 +353,15 @@ export function useSocket(): UseSocketReturn {
     if (!socket) return;
 
     setErrorMessage(null);
-    myNameRef.current = name;
     setGameLog([]);
 
     socket.emit('room:create', { playerName: name }, (res) => {
-      roomIdRef.current = res.roomId;
-      sessionStorage.setItem('red10_roomId', res.roomId);
-      sessionStorage.setItem('red10_myName', name);
+      if (!res.success || !res.roomId || !res.reconnectToken) {
+        setErrorMessage(res.error ?? 'Failed to create room');
+        setTimeout(() => setErrorMessage(null), 5000);
+        return;
+      }
+      storeSession(res.roomId, name, res.reconnectToken);
       hostIdRef.current = socket.id!; // Creator is always the host
       playersRef.current = [
         {
@@ -334,21 +374,19 @@ export function useSocket(): UseSocketReturn {
       ];
       updateRoomState(res.roomId, [...playersRef.current]);
     });
-  }, [updateRoomState]);
+  }, [updateRoomState, storeSession]);
 
   const joinRoom = useCallback((roomId: string, name: string) => {
     const socket = socketRef.current;
     if (!socket) return;
 
     setErrorMessage(null);
-    myNameRef.current = name;
     setGameLog([]);
 
-    socket.emit('room:join', { roomId: roomId.toUpperCase(), playerName: name }, (res) => {
-      if (res.success) {
-        roomIdRef.current = roomId.toUpperCase();
-        sessionStorage.setItem('red10_roomId', roomId.toUpperCase());
-        sessionStorage.setItem('red10_myName', name);
+    const normalizedRoomId = roomId.toUpperCase();
+    socket.emit('room:join', { roomId: normalizedRoomId, playerName: name }, (res) => {
+      if (res.success && res.reconnectToken) {
+        storeSession(normalizedRoomId, name, res.reconnectToken);
         // The player list will be built up from room:player_joined events
         // We add ourselves initially
         if (!playersRef.current.find((p) => p.id === socket.id)) {
@@ -363,12 +401,12 @@ export function useSocket(): UseSocketReturn {
             },
           ];
         }
-        updateRoomState(roomId.toUpperCase(), [...playersRef.current]);
+        updateRoomState(normalizedRoomId, [...playersRef.current]);
       } else {
         setErrorMessage(res.error ?? 'Failed to join room');
       }
     });
-  }, [updateRoomState]);
+  }, [updateRoomState, storeSession]);
 
   const toggleReady = useCallback(() => {
     const socket = socketRef.current;
@@ -393,11 +431,22 @@ export function useSocket(): UseSocketReturn {
     });
   }, []);
 
-  const getGameLog = useCallback(() => {
+  const downloadGameLog = useCallback(() => {
     const socket = socketRef.current;
     if (!socket) return;
+    // Always fetch a FRESH log from the server — never rely on cached state,
+    // since "Play Again" creates a new logger on the server and the client's
+    // last downloaded text would be stale otherwise.
     socket.emit('game:get_log', (res) => {
-      setGameLogText(res.log);
+      const logText = res.log;
+      if (!logText) return;
+      const blob = new Blob([logText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `red10-game-log-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
     });
   }, []);
 
@@ -474,10 +523,10 @@ export function useSocket(): UseSocketReturn {
     socket.emit('double:skip');
   }, []);
 
-  const declareQuadruple = useCallback(() => {
+  const declareQuadruple = useCallback((bombCards?: Card[]) => {
     const socket = socketRef.current;
     if (!socket) return;
-    socket.emit('quadruple:declare', (res) => {
+    socket.emit('quadruple:declare', { bombCards }, (res) => {
       if (!res.success) {
         setErrorMessage(res.error ?? 'Quadruple failed');
         setTimeout(() => setErrorMessage(null), 5000);
@@ -519,8 +568,7 @@ export function useSocket(): UseSocketReturn {
     declareQuadruple,
     skipQuadrupleAction,
     playAgain,
-    getGameLog,
-    gameLogText,
+    downloadGameLog,
     mySocketId,
     turnStartTime,
   };

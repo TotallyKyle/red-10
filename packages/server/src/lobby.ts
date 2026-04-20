@@ -1,4 +1,5 @@
-import { PLAYER_COUNT } from '@red10/shared';
+import { randomBytes, timingSafeEqual } from 'crypto';
+import { PLAYER_COUNT, MAX_NAME_LENGTH } from '@red10/shared';
 
 // ---- Interfaces ----
 
@@ -10,6 +11,50 @@ export interface RoomPlayer {
   isConnected: boolean;
   /** Timestamp when player disconnected, used for reconnect window */
   disconnectedAt: number | null;
+  /**
+   * Per-player secret, issued at join/create and on every successful rejoin.
+   * Required to reconnect — knowing the display name alone is not enough.
+   * 64-char hex (32 random bytes). Never broadcast; only returned to the
+   * owning client in the join/create callback.
+   */
+  reconnectToken: string;
+}
+
+// ---- Token helpers ----
+
+/** 32 random bytes, hex-encoded. Cryptographically strong. */
+function generateReconnectToken(): string {
+  return randomBytes(32).toString('hex');
+}
+
+/**
+ * Constant-time compare of two hex tokens. Returns false on any length
+ * mismatch or non-string input. Prevents timing-based guessing.
+ */
+export function verifyReconnectToken(expected: string, provided: unknown): boolean {
+  if (typeof provided !== 'string') return false;
+  if (typeof expected !== 'string') return false;
+  // Length gate first — timingSafeEqual throws on length mismatch.
+  if (expected.length !== provided.length || expected.length === 0) return false;
+  try {
+    return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+  } catch {
+    return false;
+  }
+}
+
+// ---- Input validation ----
+
+/**
+ * Normalize and validate a player-supplied display name.
+ * Returns the trimmed name on success, or an error reason.
+ */
+export function validatePlayerName(raw: unknown): { ok: true; name: string } | { ok: false; error: string } {
+  if (typeof raw !== 'string') return { ok: false, error: 'Name must be a string' };
+  const name = raw.trim();
+  if (name.length === 0) return { ok: false, error: 'Name cannot be empty' };
+  if (name.length > MAX_NAME_LENGTH) return { ok: false, error: `Name must be ${MAX_NAME_LENGTH} characters or fewer` };
+  return { ok: true, name };
 }
 
 export interface Room {
@@ -58,6 +103,7 @@ export function createRoom(socketId: string, playerName: string): Room {
     isReady: false,
     isConnected: true,
     disconnectedAt: null,
+    reconnectToken: generateReconnectToken(),
   };
 
   const room: Room = {
@@ -78,7 +124,7 @@ export function joinRoom(
   roomId: string,
   socketId: string,
   playerName: string,
-): { success: true; room: Room } | { success: false; error: string } {
+): { success: true; room: Room; player: RoomPlayer } | { success: false; error: string } {
   const room = rooms.get(roomId);
   if (!room) {
     return { success: false, error: 'Room not found' };
@@ -88,13 +134,18 @@ export function joinRoom(
     return { success: false, error: 'Game already started' };
   }
 
-  if (!playerName.trim()) {
-    return { success: false, error: 'Name cannot be empty' };
-  }
-
   const connectedCount = getConnectedPlayerCount(room);
   if (connectedCount >= PLAYER_COUNT) {
     return { success: false, error: 'Room is full' };
+  }
+
+  // Reject duplicate names in the same room. If we allowed duplicates, the
+  // by-name reconnect lookup would be ambiguous and joiners could deliberately
+  // collide with an existing player's display name.
+  for (const p of room.players.values()) {
+    if (p.name === playerName) {
+      return { success: false, error: 'Name already taken in this room' };
+    }
   }
 
   // Assign next available seat index
@@ -114,12 +165,13 @@ export function joinRoom(
     isReady: false,
     isConnected: true,
     disconnectedAt: null,
+    reconnectToken: generateReconnectToken(),
   };
 
   room.players.set(socketId, player);
   playerRoomMap.set(socketId, roomId);
 
-  return { success: true, room };
+  return { success: true, room, player };
 }
 
 export function toggleReady(socketId: string): { room: Room; player: RoomPlayer } | null {
@@ -205,6 +257,9 @@ export function handleReconnect(
   player.socketId = newSocketId;
   player.isConnected = true;
   player.disconnectedAt = null;
+  // Rotate the reconnect token so a stolen copy of the previous token
+  // (e.g., from a local-storage read after this point) can't be reused.
+  player.reconnectToken = generateReconnectToken();
   room.players.set(newSocketId, player);
 
   playerRoomMap.delete(oldSocketId);
@@ -233,17 +288,28 @@ export function getRoomForSocket(socketId: string): Room | undefined {
 }
 
 /**
- * Find a disconnected player in a room by name.
- * Returns the old socket ID if found, null otherwise.
+ * Authenticate a rejoin attempt. Returns the old socket ID only if a
+ * disconnected player with the given name AND a matching reconnect token
+ * exists. The token check is constant-time to prevent guessing by timing.
+ *
+ * All failure paths return the same shape and a generic error so an
+ * attacker cannot distinguish "room doesn't exist" from "wrong token" from
+ * "name not in room" via either response content or response latency.
  */
-export function findDisconnectedPlayer(roomId: string, playerName: string): { room: Room; oldSocketId: string } | null {
+export function findDisconnectedPlayerForRejoin(
+  roomId: string,
+  playerName: string,
+  reconnectToken: unknown,
+): { room: Room; oldSocketId: string; player: RoomPlayer } | null {
   const room = rooms.get(roomId);
   if (!room) return null;
 
   for (const [socketId, player] of room.players.entries()) {
-    if (player.name === playerName && !player.isConnected) {
-      return { room, oldSocketId: socketId };
-    }
+    if (player.name !== playerName) continue;
+    if (player.isConnected) continue;
+    // Constant-time token check is the ONLY gate that lets the caller back in.
+    if (!verifyReconnectToken(player.reconnectToken, reconnectToken)) continue;
+    return { room, oldSocketId: socketId, player };
   }
   return null;
 }
@@ -292,6 +358,10 @@ export function addBotToRoom(
     isReady: true,
     isConnected: true,
     disconnectedAt: null,
+    // Bots never reconnect, but give them a valid token anyway so the type
+    // stays uniform and defensive code elsewhere doesn't have to special-case
+    // empty strings.
+    reconnectToken: generateReconnectToken(),
   };
 
   room.players.set(botSocketId, player);
