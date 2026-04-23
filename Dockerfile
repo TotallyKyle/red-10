@@ -15,7 +15,13 @@ WORKDIR /app
 
 # Install all workspace package.json files first so Docker can cache the
 # `npm install` step when only source changes.
-COPY package.json package-lock.json* ./
+#
+# We intentionally do NOT copy package-lock.json. The lockfile on a
+# developer's machine pins platform-specific natives (darwin-arm64
+# lightningcss/rollup binaries under bun install) that Alpine Linux
+# rejects. Letting npm resolve fresh inside the container picks the
+# linux-x64 natives instead.
+COPY package.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
 COPY packages/client/package.json ./packages/client/
@@ -33,8 +39,8 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Copy workspace manifests
-COPY --from=builder /app/package.json /app/package-lock.json* ./
+# Copy workspace manifests (see note above re: not copying the lockfile).
+COPY --from=builder /app/package.json ./
 COPY --from=builder /app/packages/shared/package.json ./packages/shared/
 COPY --from=builder /app/packages/server/package.json ./packages/server/
 COPY --from=builder /app/packages/client/package.json ./packages/client/
