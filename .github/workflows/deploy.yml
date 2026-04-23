@@ -1,0 +1,55 @@
+# Auto-deploy to Fly.io on every push to main.
+#
+# One-time setup (see DEPLOY.md):
+#   1. Create a scoped deploy token locally:
+#        fly tokens create deploy -a red-10
+#   2. Add it as a GitHub Actions secret named FLY_API_TOKEN:
+#        https://github.com/TotallyKyle/red-10/settings/secrets/actions
+#
+# After that, every push to main that passes CI will deploy automatically.
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [main]
+
+# Only one deploy at a time — if a newer push arrives, cancel the in-flight run
+# rather than queuing multiple deploys of the same app.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Run tests + build here as a pre-deploy gate. CI runs in parallel on
+      # the same commit; doing it again here guarantees we never ship a
+      # broken build even if CI is skipped or misconfigured.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
