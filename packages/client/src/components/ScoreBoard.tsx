@@ -51,15 +51,15 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogTe
   const teamLabel = (team: Team) => (team === 'red10' ? 'Red 10 Team' : 'Black 10 Team');
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-      <div className="bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full p-8">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full p-4 sm:p-8">
         {/* Header */}
-        <h1 className="text-3xl font-bold text-center mb-2 text-white">Game Over</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-center mb-2 text-white">Game Over</h1>
 
         {result ? (
           <>
             {/* Winner announcement */}
-            <div className={`text-center text-xl font-semibold mb-6 ${
+            <div className={`text-center text-base sm:text-xl font-semibold mb-3 sm:mb-6 ${
               result.scoringTeamWon ? 'text-green-400' : 'text-red-400'
             }`}>
               {result.scoringTeamWon
@@ -68,7 +68,7 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogTe
             </div>
 
             {/* Stake multiplier */}
-            <div className="text-center text-yellow-400 text-sm mb-6">
+            <div className="text-center text-yellow-400 text-xs sm:text-sm mb-3 sm:mb-6">
               Stake Multiplier: x{gameView.stakeMultiplier}
               {gameView.stakeMultiplier > 1 && (
                 <span className="text-gray-400 ml-2">
@@ -77,13 +77,13 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogTe
               )}
             </div>
 
-            {/* Team rosters */}
-            <div className="grid grid-cols-2 gap-6 mb-6">
+            {/* Team rosters — stack on mobile, side-by-side on tablet+. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-6 mb-4 sm:mb-6">
               {[
                 { team: 'red10' as Team, members: red10Team },
                 { team: 'black10' as Team, members: black10Team },
               ].map(({ team, members }) => (
-                <div key={team} className={`rounded-lg p-4 ${
+                <div key={team} className={`rounded-lg p-3 sm:p-4 ${
                   team === 'red10' ? 'bg-red-900/30 border border-red-700' : 'bg-gray-700/30 border border-gray-600'
                 }`}>
                   <h3 className={`text-sm font-bold mb-3 uppercase tracking-wider ${
@@ -159,26 +159,26 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogTe
         )}
 
         {/* Actions */}
-        <div className="text-center space-y-3">
-          <div className="flex justify-center gap-4">
+        <div className="text-center space-y-2 sm:space-y-3">
+          <div className="flex justify-center gap-2 sm:gap-4">
             <button
               onClick={onPlayAgain}
-              className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors"
+              className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 sm:py-3 px-4 sm:px-8 rounded-lg text-base sm:text-lg transition-colors"
             >
               Play Again
             </button>
             <button
               onClick={handleDownloadLog}
-              className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors flex items-center gap-2"
+              className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 sm:py-3 px-4 sm:px-6 rounded-lg text-base sm:text-lg transition-colors flex items-center gap-1.5 sm:gap-2"
               title="Download game log"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Log
             </button>
           </div>
-          <div className="text-gray-400 text-sm">
+          <div className="text-gray-400 text-xs sm:text-sm">
             {playAgainCount}/{totalPlayers} ready
           </div>
         </div>

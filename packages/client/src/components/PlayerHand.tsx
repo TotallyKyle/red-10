@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Card as CardType } from '@red10/shared';
 import { RANK_ORDER } from '@red10/shared';
 import Card from './Card.js';
+import { useViewportWidth } from '../hooks/useViewport.js';
 
 interface PlayerHandProps {
   cards: CardType[];
@@ -52,20 +53,81 @@ function groupByRank(sorted: CardType[]): CardType[][] {
   return groups;
 }
 
+/** Card width (in px) for each size variant, so we can reason about fit. */
+const CARD_WIDTH: Record<'sm' | 'md' | 'lg' | 'xl', number> = {
+  sm: 40,  // w-10
+  md: 56,  // w-14
+  lg: 80,  // w-20
+  xl: 96,  // w-24
+};
+
+interface HandLayout {
+  size: 'sm' | 'md' | 'lg' | 'xl';
+  /** Step between adjacent cards in the SAME rank group, in px (usually negative). */
+  withinOverlap: number;
+  /** Extra left margin at the start of a NEW rank group, in px. Visual separator. */
+  groupGap: number;
+}
+
 /**
- * Choose card size and overlap based on card count so the hand fits on screen.
+ * Choose card size + overlap so the whole hand visually fits the viewport.
+ *
+ * Mobile sizing picks the largest card size where the entire hand (counting
+ * both within-group overlap and between-group gaps) fits the available width,
+ * so the last card is never clipped.
  */
-function getHandLayout(cardCount: number) {
+function getHandLayout(cardCount: number, numGroups: number, viewportWidth: number): HandLayout {
+  const isMobile = viewportWidth < 640;
+
+  if (isMobile) {
+    // Leave ~20px of side padding total so nothing clips at the viewport edge.
+    const available = Math.max(280, viewportWidth - 20);
+
+    // Pick the largest card size that still leaves each card with enough
+    // exposed width to tap reliably. md (56px) fits up to 13 cards on a
+    // 375px phone, so we only fall back to sm on unusually wide hands.
+    const size: 'sm' | 'md' | 'lg' | 'xl' =
+      cardCount <= 5 ? 'xl' :
+      cardCount <= 7 ? 'lg' :
+      cardCount <= 13 ? 'md' :
+      'sm';
+
+    const w = CARD_WIDTH[size];
+
+    if (cardCount <= 1) {
+      // Single card — no overlap needed. Keep group gap at 0 so step logic
+      // doesn't accidentally shift the card offscreen.
+      return { size, withinOverlap: 0, groupGap: 0 };
+    }
+
+    // Uniform step between every consecutive card (treat within-group and
+    // between-group transitions the same). This lets the formula below
+    // reason about the whole hand in one calculation.
+    //   total = w + (cardCount - 1) * step
+    // We want total ≤ available, so:
+    //   step ≤ (available - w) / (cardCount - 1)
+    // Also: don't SPREAD cards (step ≤ w) and always show enough card to tap
+    // (step ≥ minExposed scaled to card width).
+    const minExposed = Math.max(18, Math.floor(w * 0.35));
+    let step = Math.floor((available - w) / (cardCount - 1));
+    if (step > w) step = w;
+    if (step < minExposed) step = minExposed;
+
+    const overlap = step - w; // negative on mobile — cards overlap
+    return { size, withinOverlap: overlap, groupGap: overlap };
+  }
+
+  // Desktop: roomy sizing that preserves the original feel.
   if (cardCount <= 6) {
-    return { size: 'xl' as const, withinOverlap: -10, groupGap: 14 };
+    return { size: 'xl', withinOverlap: -10, groupGap: 14 };
   }
   if (cardCount <= 9) {
-    return { size: 'lg' as const, withinOverlap: -12, groupGap: 10 };
+    return { size: 'lg', withinOverlap: -12, groupGap: 10 };
   }
   if (cardCount <= 13) {
-    return { size: 'lg' as const, withinOverlap: -16, groupGap: 8 };
+    return { size: 'lg', withinOverlap: -16, groupGap: 8 };
   }
-  return { size: 'md' as const, withinOverlap: -18, groupGap: 6 };
+  return { size: 'md', withinOverlap: -18, groupGap: 6 };
 }
 
 function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
@@ -112,7 +174,12 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
 
   const groups = groupByRank(displayCards);
   const selectedIds = new Set(selectedCards.map((c) => c.id));
-  const { size, withinOverlap, groupGap } = getHandLayout(cards.length);
+  const viewportWidth = useViewportWidth();
+  const { size, withinOverlap, groupGap } = getHandLayout(
+    cards.length,
+    groups.length,
+    viewportWidth,
+  );
 
   // Build flat list for drag indexing
   const flatCards = groups.flat();
@@ -192,8 +259,8 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   let globalIndex = 0;
 
   return (
-    <div className="flex justify-center items-end pb-3 px-4">
-      <div className="flex items-end">
+    <div className="flex justify-center items-end pb-3 px-2 sm:px-4 w-full">
+      <div className="flex items-end max-w-full">
         {groups.map((group, groupIdx) => (
           <div
             key={group[0].rank + '-' + groupIdx}
@@ -226,10 +293,12 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
               );
             })}
 
-            {/* Rank count badge for multiples */}
+            {/* Rank count badge for multiples — hidden on mobile (would eat
+                the width budget and the sort-grouping already makes it
+                obvious which cards are paired/tripled). */}
             {group.length >= 2 && (
               <div
-                className={`relative -ml-3 mb-1 z-50 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
+                className={`hidden sm:flex relative -ml-3 mb-1 z-50 items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
                   group.length >= 3
                     ? 'bg-amber-500 text-black'
                     : 'bg-green-600/80 text-white'

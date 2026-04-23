@@ -188,13 +188,13 @@ function ActionBar({
         </span>
       )}
 
-      <div className="flex items-center justify-center gap-2 sm:gap-4 flex-wrap">
+      <div className="flex items-stretch sm:items-center justify-center gap-2 sm:gap-4 flex-nowrap w-full">
         {showActions ? (
           <>
             {canGoCha && (
               <button
                 onClick={onGoCha}
-                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-yellow-500 hover:bg-yellow-400 text-black cursor-pointer animate-pulse w-full sm:w-auto"
+                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-yellow-500 hover:bg-yellow-400 text-black cursor-pointer animate-pulse flex-1 sm:flex-none min-w-0"
               >
                 GO-CHA!
               </button>
@@ -202,7 +202,7 @@ function ActionBar({
             {canCha && (
               <button
                 onClick={onCha}
-                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-orange-600 hover:bg-orange-500 text-white cursor-pointer w-full sm:w-auto"
+                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-orange-600 hover:bg-orange-500 text-white cursor-pointer flex-1 sm:flex-none min-w-0"
               >
                 CHA!
               </button>
@@ -210,7 +210,7 @@ function ActionBar({
             {canDeclineCha && (
               <button
                 onClick={onDeclineCha}
-                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-gray-500 hover:bg-gray-400 text-white cursor-pointer w-full sm:w-auto"
+                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-gray-500 hover:bg-gray-400 text-white cursor-pointer flex-1 sm:flex-none min-w-0"
               >
                 Decline
               </button>
@@ -220,7 +220,7 @@ function ActionBar({
                 onClick={onPlay}
                 disabled={!canPlay}
                 title={!canPlay && validation.reason ? validation.reason : undefined}
-                className={`px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors w-full sm:w-auto ${
+                className={`px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors flex-1 sm:flex-none min-w-0 ${
                   canPlay
                     ? 'bg-yellow-500 hover:bg-yellow-400 text-black cursor-pointer'
                     : 'bg-gray-600 text-gray-400 cursor-not-allowed'
@@ -234,7 +234,7 @@ function ActionBar({
               <button
                 onClick={onPlay}
                 disabled={!canPlay}
-                className={`px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors w-full sm:w-auto ${
+                className={`px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors flex-1 sm:flex-none min-w-0 ${
                   canPlay
                     ? 'bg-yellow-500 hover:bg-yellow-400 text-black cursor-pointer'
                     : 'bg-gray-600 text-gray-400 cursor-not-allowed'
@@ -246,7 +246,7 @@ function ActionBar({
             {canDefuse && (
               <button
                 onClick={onDefuse}
-                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-blue-600 hover:bg-blue-500 text-white cursor-pointer w-full sm:w-auto"
+                className="px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors bg-blue-600 hover:bg-blue-500 text-white cursor-pointer flex-1 sm:flex-none min-w-0"
               >
                 Defuse
               </button>
@@ -255,7 +255,7 @@ function ActionBar({
               <button
                 onClick={onPass}
                 disabled={!canPass}
-                className={`px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors w-full sm:w-auto ${
+                className={`px-4 sm:px-6 py-2 rounded-lg font-bold text-xs sm:text-sm transition-colors flex-1 sm:flex-none min-w-0 ${
                   canPass
                     ? 'bg-gray-500 hover:bg-gray-400 text-white cursor-pointer'
                     : 'bg-gray-700 text-gray-500 cursor-not-allowed'

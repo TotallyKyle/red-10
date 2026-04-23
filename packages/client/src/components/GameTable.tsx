@@ -58,13 +58,20 @@ const POSITIONS = [
   { bottom: '28%', right: '4%' },
 ] as const;
 
-/** Mobile positions: tighter layout, same clockwise order */
+/**
+ * Mobile positions.
+ *
+ * The top-center player (seat +3, across) sits BELOW the status strip and has
+ * enough headroom that the turn timer / team badge / stake indicator don't
+ * visually overlap the player chip. Corners are pulled in tighter so they
+ * clear both the top status strip and the bottom hand.
+ */
 const MOBILE_POSITIONS = [
-  { bottom: '30%', left: '2%' },
-  { top: '15%', left: '2%' },
-  { top: '2%', left: '50%', transform: 'translateX(-50%)' },
-  { top: '15%', right: '2%' },
-  { bottom: '30%', right: '2%' },
+  { bottom: '13.5rem', left: '2%' },
+  { top: '11%', left: '2%' },
+  { top: '2.5rem', left: '50%', transform: 'translateX(-50%)' },
+  { top: '11%', right: '2%' },
+  { bottom: '13.5rem', right: '2%' },
 ] as const;
 
 function GameTable({
@@ -100,18 +107,21 @@ function GameTable({
 
   return (
     <div className="min-h-screen bg-green-900 relative overflow-hidden">
-      {/* Game info bar */}
-      <div className="absolute top-2 left-2 sm:left-1/2 sm:-translate-x-1/2 z-10 flex gap-2 sm:gap-3 items-center flex-wrap">
-        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+      {/* Game info bar — occupies the left half of the top row on mobile
+          so the Game Log button (right half) and the seat-3 player (below)
+          don't collide. */}
+      <div className="absolute top-2 left-2 right-24 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-10 flex gap-1.5 sm:gap-3 items-center">
+        <span className={`text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${
           gameView.myTeam === 'red10'
             ? 'bg-red-600 text-white'
             : 'bg-gray-800 text-white'
         }`}>
-          {gameView.myTeam === 'red10' ? 'Red Team' : 'Black Team'}
+          {gameView.myTeam === 'red10' ? 'Red' : 'Black'}
+          <span className="hidden sm:inline"> Team</span>
         </span>
         {stakeLabel && (
-          <span className="text-yellow-400 text-xs font-bold bg-yellow-900/60 px-2 py-0.5 rounded-full animate-pulse">
-            x{gameView.stakeMultiplier} {stakeLabel}
+          <span className="text-yellow-400 text-[10px] sm:text-xs font-bold bg-yellow-900/60 px-2 py-0.5 rounded-full animate-pulse shrink-0">
+            x{gameView.stakeMultiplier}<span className="hidden sm:inline"> {stakeLabel}</span>
           </span>
         )}
         {/* Turn timer */}
@@ -123,11 +133,14 @@ function GameTable({
         )}
       </div>
 
-      {/* Table surface */}
-      <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-32 sm:bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
+      {/* Table surface — `bottom-48` on mobile reserves space for the
+          player-name + hand + action-bar stack underneath. */}
+      <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-48 sm:bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
 
-      {/* Center play area */}
-      <div className="absolute top-[40%] sm:top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-[280px] sm:w-auto">
+      {/* Center play area — anchored to the middle of the TABLE (which now
+          stops at bottom-48 on mobile), not the viewport, so it doesn't push
+          into the hand area. */}
+      <div className="absolute top-[calc(50%_-_2rem)] sm:top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
         <PlayArea round={gameView.round} players={gameView.players} />
       </div>
 
@@ -162,10 +175,12 @@ function GameTable({
         );
       })}
 
-      {/* My hand at the bottom */}
-      <div className="absolute bottom-12 sm:bottom-12 left-0 right-0 z-20">
+      {/* Bottom UI stack — player name, hand, action bar all in one flex
+          column so they never overlap. The ellipse table reserves space for
+          this via `bottom-32 sm:bottom-36` above. */}
+      <div className="absolute bottom-0 left-0 right-0 z-20 flex flex-col">
         {/* Player name label */}
-        <div className="text-center mb-1">
+        <div className="text-center pb-1 sm:pb-2 pt-1 bg-gradient-to-t from-green-900/60 to-transparent">
           <span className="text-white text-xs sm:text-sm font-semibold">
             {myPlayer?.name ?? 'You'}
           </span>
@@ -176,10 +191,6 @@ function GameTable({
           selectedCards={selectedCards}
           onToggleCard={onToggleCard}
         />
-      </div>
-
-      {/* Action bar at the very bottom */}
-      <div className="absolute bottom-0 left-0 right-0 z-30">
         <ActionBar
           validActions={gameView.validActions}
           isMyTurn={gameView.isMyTurn}

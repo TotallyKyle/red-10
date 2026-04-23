@@ -1,6 +1,7 @@
 import type { RoundInfo, ClientPlayerView, Play, Card as CardType } from '@red10/shared';
 import { RANK_ORDER } from '@red10/shared';
 import Card from './Card.js';
+import { useViewportWidth } from '../hooks/useViewport.js';
 
 /** Sort cards by rank for display (low to high) */
 function sortByRank(cards: CardType[]): CardType[] {
@@ -38,7 +39,21 @@ function isRedTenBomb(play: Play): boolean {
   return !!play.specialBomb && (play.specialBomb === 'red10_2' || play.specialBomb === 'red10_3');
 }
 
+/**
+ * Pick a card size for the center play area that fits the viewport with the
+ * given number of cards. Favors the most readable size that won't overflow.
+ */
+function getPlaySize(cardCount: number, viewportWidth: number): 'sm' | 'md' | 'lg' {
+  const isMobile = viewportWidth < 640;
+  if (!isMobile) return 'lg';
+  if (cardCount <= 3) return 'lg';  // 1–3 cards: big and readable
+  if (cardCount <= 5) return 'md';  // 4–5 cards: medium (fits ~300px)
+  return 'sm';                      // 6+ cards (paired straights): small but fits
+}
+
 function PlayArea({ round, players }: PlayAreaProps) {
+  const viewportWidth = useViewportWidth();
+
   if (!round) {
     return (
       <div className="w-40 sm:w-48 h-24 sm:h-32 rounded-xl border-2 border-dashed border-green-600/50 flex items-center justify-center">
@@ -101,9 +116,13 @@ function PlayArea({ round, players }: PlayAreaProps) {
         }`}
       >
         {lastPlay ? (
-          <div className="flex items-center gap-1 sm:gap-1.5 animate-slide-in">
+          <div className="flex items-center gap-0.5 sm:gap-1.5 animate-slide-in max-w-[calc(100vw_-_24px)]">
             {sortByRank(lastPlay.cards).map((card) => (
-              <Card key={card.id} card={card} size="lg" />
+              <Card
+                key={card.id}
+                card={card}
+                size={getPlaySize(lastPlay.cards.length, viewportWidth)}
+              />
             ))}
           </div>
         ) : (
