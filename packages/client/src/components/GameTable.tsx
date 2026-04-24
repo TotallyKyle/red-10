@@ -1,5 +1,5 @@
 import type { ClientGameView, Card as CardType } from '@red10/shared';
-import type { GameLogEntry } from '../hooks/useSocket.js';
+import type { GameLogEntry, RoundEndDisplay } from '../hooks/useSocket.js';
 import PlayerHand from './PlayerHand.js';
 import OtherPlayer from './OtherPlayer.js';
 import PlayArea from './PlayArea.js';
@@ -23,6 +23,7 @@ interface GameTableProps {
   turnStartTime: number | null;
   onRequestLog?: () => void;
   gameLogText?: string | null;
+  roundEndDisplay: RoundEndDisplay | null;
 }
 
 /**
@@ -77,6 +78,7 @@ const MOBILE_POSITIONS = [
 function GameTable({
   gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass,
   onDefuse, onCha, onGoCha, onDeclineCha, gameLog, errorMessage, turnStartTime, onRequestLog, gameLogText,
+  roundEndDisplay,
 }: GameTableProps) {
   const myPlayer = gameView.players.find((p) => p.id === mySocketId);
   const mySeatIndex = myPlayer?.seatIndex ?? 0;
@@ -141,7 +143,7 @@ function GameTable({
           stops at bottom-48 on mobile), not the viewport, so it doesn't push
           into the hand area. */}
       <div className="absolute top-[calc(50%_-_2rem)] sm:top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
-        <PlayArea round={gameView.round} players={gameView.players} />
+        <PlayArea round={gameView.round} players={gameView.players} roundEndDisplay={roundEndDisplay} />
       </div>
 
       {/* Other players */}
@@ -177,10 +179,23 @@ function GameTable({
 
       {/* Bottom UI stack — player name, hand, action bar all in one flex
           column so they never overlap. The ellipse table reserves space for
-          this via `bottom-32 sm:bottom-36` above. */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 flex flex-col">
+          this via `bottom-32 sm:bottom-36` above. When it's my turn the whole
+          stack gets a glowing yellow ring so it's unmistakable. */}
+      <div
+        className={`absolute bottom-0 left-0 right-0 z-20 flex flex-col transition-all ${
+          gameView.isMyTurn
+            ? 'ring-4 ring-yellow-400 ring-inset shadow-[0_-10px_32px_rgba(250,204,21,0.45)] animate-your-turn-glow'
+            : ''
+        }`}
+      >
         {/* Player name label */}
-        <div className="text-center pb-1 sm:pb-2 pt-1 bg-gradient-to-t from-green-900/60 to-transparent flex items-center justify-center gap-1.5">
+        <div
+          className={`text-center pb-1 sm:pb-2 pt-1 flex items-center justify-center gap-1.5 ${
+            gameView.isMyTurn
+              ? 'bg-gradient-to-t from-yellow-600/70 to-yellow-900/30'
+              : 'bg-gradient-to-t from-green-900/60 to-transparent'
+          }`}
+        >
           <span className="text-white text-xs sm:text-sm font-semibold">
             {myPlayer?.name ?? 'You'}
           </span>
@@ -194,6 +209,11 @@ function GameTable({
           >
             {gameView.myTeam === 'red10' ? 'RED' : 'BLK'}
           </span>
+          {gameView.isMyTurn && (
+            <span className="text-[11px] sm:text-xs font-extrabold px-2 py-0.5 rounded-full bg-yellow-400 text-black uppercase tracking-wide animate-pulse shadow-md">
+              Your Turn
+            </span>
+          )}
         </div>
         <PlayerHand
           cards={gameView.myHand}

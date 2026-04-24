@@ -16,10 +16,15 @@ function OtherPlayer({ player, isCurrentTurn = false, compact = false }: OtherPl
       <div
         className={`relative flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg min-w-[60px] transition-all ${
           isCurrentTurn
-            ? 'bg-yellow-700/50 ring-2 ring-yellow-400 animate-pulse-subtle'
+            ? 'bg-yellow-500/60 ring-2 ring-yellow-300 animate-turn-ring'
             : 'bg-green-800/70'
         } ${!player.isConnected ? 'opacity-50' : ''}`}
       >
+        {isCurrentTurn && (
+          <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 text-[8px] font-extrabold px-1.5 py-0.5 rounded-full bg-yellow-400 text-black shadow z-20">
+            TURN
+          </div>
+        )}
         {/* OUT badge */}
         {player.isOut && (
           <div className="absolute -top-1 -right-1 bg-red-600 text-white text-[8px] font-bold px-1 rounded-full z-10">
@@ -48,10 +53,17 @@ function OtherPlayer({ player, isCurrentTurn = false, compact = false }: OtherPl
     <div
       className={`relative flex flex-col items-center gap-1 px-3 py-2 rounded-xl min-w-[90px] transition-all ${
         isCurrentTurn
-          ? 'bg-yellow-700/40 ring-2 ring-yellow-400 shadow-lg shadow-yellow-400/20 animate-pulse-subtle'
+          ? 'bg-yellow-600/50 ring-2 ring-yellow-300 shadow-lg shadow-yellow-400/40 animate-turn-ring'
           : 'bg-green-800/60'
       } ${!player.isConnected ? 'opacity-50' : ''} ${player.isOut ? 'opacity-70' : ''}`}
     >
+      {/* TURN badge — sits above the card so it's obvious whose turn it is */}
+      {isCurrentTurn && (
+        <div className="absolute -top-2 left-1/2 -translate-x-1/2 bg-yellow-400 text-black text-[10px] font-extrabold px-2 py-0.5 rounded-full z-20 shadow-md uppercase tracking-wide">
+          Turn
+        </div>
+      )}
+
       {/* OUT badge overlay */}
       {player.isOut && (
         <div className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full z-10 shadow-md">
