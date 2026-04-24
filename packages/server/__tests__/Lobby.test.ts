@@ -7,7 +7,7 @@
  * player's seat and hand can be stolen by anyone who knows the room code and
  * display name.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   createRoom,
   joinRoom,
@@ -18,8 +18,10 @@ import {
   verifyReconnectToken,
   getRoom,
   getRoomForSocket,
+  addBotToRoom,
+  setOnPlayerRemoved,
 } from '../src/lobby.js';
-import { MAX_NAME_LENGTH } from '@red10/shared';
+import { MAX_NAME_LENGTH, PLAYER_COUNT } from '@red10/shared';
 
 // Each test gets a fresh room because the lobby module holds module-level
 // state. We use unique socket IDs so rooms don't collide across tests.
@@ -233,6 +235,86 @@ describe('full attack scenario — the original vulnerability, now blocked', () 
     // Alice (holding her actual token) CAN still reconnect.
     const aliceToken = getRoom(room.id)!.players.get(aliceSocket)!.reconnectToken;
     expect(findDisconnectedPlayerForRejoin(room.id, 'Alice', aliceToken)).not.toBeNull();
+  });
+});
+
+describe('joinRoom — disconnected seats are reserved (room can never overflow PLAYER_COUNT)', () => {
+  it('rejects a new joiner while a disconnected player still holds a seat', () => {
+    // Fill the room: host + 5 joiners = 6 total.
+    const hostSocket = freshSocketId('host');
+    const room = createRoom(hostSocket, 'P0');
+    for (let i = 1; i < PLAYER_COUNT; i++) {
+      const r = joinRoom(room.id, freshSocketId(`p${i}`), `P${i}`);
+      expect(r.success).toBe(true);
+    }
+    expect(room.players.size).toBe(PLAYER_COUNT);
+
+    // One player drops. They keep their seat for the reconnect window.
+    handleDisconnect([...room.players.keys()][3]);
+    expect(room.players.size).toBe(PLAYER_COUNT);
+
+    // A new joiner must NOT be allowed to slip in — that's exactly the bug
+    // that produced a 7-row lobby with seat indices going up to 6 and made
+    // GameEngine.startGame throw on a missing hand slot.
+    const r = joinRoom(room.id, freshSocketId('overflow'), 'Overflow');
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/full/i);
+    expect(room.players.size).toBe(PLAYER_COUNT);
+  });
+
+  it('lets a new joiner take a freed seat once the reconnect window evicts the disconnected player', () => {
+    const hostSocket = freshSocketId('host');
+    const room = createRoom(hostSocket, 'P0');
+    for (let i = 1; i < PLAYER_COUNT; i++) {
+      joinRoom(room.id, freshSocketId(`p${i}`), `P${i}`);
+    }
+    // Manually evict (simulates the 60s timer firing) by deleting from the
+    // map. We don't expose the internal removal helper, so we lean on the
+    // observable contract: once size drops below PLAYER_COUNT, joins succeed.
+    const droppedSocket = [...room.players.keys()][2];
+    room.players.delete(droppedSocket);
+
+    const r = joinRoom(room.id, freshSocketId('replacement'), 'Replacement');
+    expect(r.success).toBe(true);
+  });
+
+  it('addBotToRoom respects the same total-slot cap', () => {
+    const hostSocket = freshSocketId('host');
+    const room = createRoom(hostSocket, 'P0');
+    for (let i = 1; i < PLAYER_COUNT; i++) {
+      joinRoom(room.id, freshSocketId(`p${i}`), `P${i}`);
+    }
+    // Drop one — seat held for reconnect.
+    handleDisconnect([...room.players.keys()][1]);
+
+    // A bot fill must not push us over PLAYER_COUNT either.
+    const bot = addBotToRoom(room.id, 'bot-1', 'Botty');
+    expect(bot).toBeNull();
+    expect(room.players.size).toBe(PLAYER_COUNT);
+  });
+});
+
+describe('setOnPlayerRemoved — eviction broadcast hook fires after the reconnect window', () => {
+  it('invokes the registered callback when a disconnected player is evicted', async () => {
+    vi.useFakeTimers();
+    try {
+      const removed: Array<{ roomId: string; socketId: string }> = [];
+      setOnPlayerRemoved((roomId, socketId) => {
+        removed.push({ roomId, socketId });
+      });
+
+      const hostSocket = freshSocketId('host');
+      const room = createRoom(hostSocket, 'Solo');
+      handleDisconnect(hostSocket);
+
+      // Reconnect window is 60s — fast-forward past it to fire the timer.
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      expect(removed).toEqual([{ roomId: room.id, socketId: hostSocket }]);
+    } finally {
+      setOnPlayerRemoved(null);
+      vi.useRealTimers();
+    }
   });
 });
 

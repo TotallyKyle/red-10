@@ -265,6 +265,16 @@ export function useSocket(): UseSocketReturn {
       }
     });
 
+    // Server fires this after the reconnect window expires and the player is
+    // permanently evicted. Drop them from the local list so the lobby count
+    // and roster don't stay stuck at 7 (with one greyed-out row).
+    socket.on('room:player_removed', (data) => {
+      playersRef.current = playersRef.current.filter((p) => p.id !== data.playerId);
+      if (roomIdRef.current) {
+        updateRoomState(roomIdRef.current, [...playersRef.current]);
+      }
+    });
+
     socket.on('game:state', (view) => {
       setGameView(view);
       // Reset turn timer on new state

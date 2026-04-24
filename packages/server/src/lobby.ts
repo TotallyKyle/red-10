@@ -78,6 +78,19 @@ const ROOM_CODE_LENGTH = 4;
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 const RECONNECT_WINDOW_MS = 60_000;
 
+// ---- Removal callback ----
+
+/**
+ * Notified when the reconnect-window timer evicts a player who never came
+ * back. Wired up from index.ts so it can broadcast `room:player_removed` —
+ * without it, clients would keep showing the stale "Disconnected" row forever.
+ */
+type PlayerRemovedCallback = (roomId: string, socketId: string) => void;
+let onPlayerRemoved: PlayerRemovedCallback | null = null;
+export function setOnPlayerRemoved(cb: PlayerRemovedCallback | null): void {
+  onPlayerRemoved = cb;
+}
+
 // ---- Helpers ----
 
 function generateRoomCode(): string {
@@ -134,8 +147,11 @@ export function joinRoom(
     return { success: false, error: 'Game already started' };
   }
 
-  const connectedCount = getConnectedPlayerCount(room);
-  if (connectedCount >= PLAYER_COUNT) {
+  // Cap by total player slots, not connected count. A disconnected player
+  // holds their seat for the reconnect window — we must not let a new joiner
+  // overflow the room, or `startGame` ends up dealing for >PLAYER_COUNT seats
+  // and the engine throws on `hands[i]` out-of-bounds.
+  if (room.players.size >= PLAYER_COUNT) {
     return { success: false, error: 'Room is full' };
   }
 
@@ -338,8 +354,8 @@ export function addBotToRoom(
   const room = rooms.get(roomId);
   if (!room) return null;
 
-  const connectedCount = getConnectedPlayerCount(room);
-  if (connectedCount >= PLAYER_COUNT) return null;
+  // Same total-slot cap as joinRoom — see joinRoom for reasoning.
+  if (room.players.size >= PLAYER_COUNT) return null;
 
   // Assign next available seat index
   const takenSeats = new Set<number>();
@@ -372,14 +388,6 @@ export function addBotToRoom(
 
 // ---- Internal helpers ----
 
-function getConnectedPlayerCount(room: Room): number {
-  let count = 0;
-  for (const p of room.players.values()) {
-    if (p.isConnected) count++;
-  }
-  return count;
-}
-
 function transferHost(room: Room): void {
   for (const p of room.players.values()) {
     if (p.isConnected && p.socketId !== room.hostId) {
@@ -400,6 +408,11 @@ function removePlayerIfStillDisconnected(roomId: string, socketId: string): void
   // Still disconnected after timeout — remove them
   room.players.delete(socketId);
   playerRoomMap.delete(socketId);
+
+  // Notify the wiring layer so it can broadcast to remaining clients.
+  // We fire this even on the last-player path; the room is gone, but if
+  // there's still a socket in the room channel (race), it gets a clean event.
+  onPlayerRemoved?.(roomId, socketId);
 
   // Clean up empty rooms
   if (room.players.size === 0) {
