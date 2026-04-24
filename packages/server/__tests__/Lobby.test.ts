@@ -1,11 +1,19 @@
 /**
- * Lobby auth regression tests.
+ * Lobby auth + reconnect tests.
  *
- * These cover the reconnect-token boundary and the display-name validation
- * added to close the session-hijack finding. If any of these tests ever fail,
- * the public game server has regressed into a state where a disconnected
- * player's seat and hand can be stolen by anyone who knows the room code and
- * display name.
+ * Two reconnect paths are intentionally permitted, with different bars:
+ *
+ * 1. `findDisconnectedPlayerForRejoin` (used by the `room:rejoin` event) —
+ *    requires a per-player reconnect token. This is the strict path used on
+ *    page reload when sessionStorage survived; tests below assert it cannot
+ *    be bypassed by guessing or reusing rotated tokens.
+ *
+ * 2. `findDisconnectedPlayerByName` (used by the `room:join` event) —
+ *    matches on room code + display name only, no token. This is the
+ *    intentional UX fallback so a player who lost their session (different
+ *    browser, fresh tab) can reclaim their seat by re-typing their name.
+ *    The threat model is a private friends-game where the 4-char room code
+ *    is the credential.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
@@ -20,6 +28,7 @@ import {
   getRoomForSocket,
   addBotToRoom,
   setOnPlayerRemoved,
+  findDisconnectedPlayerByName,
 } from '../src/lobby.js';
 import { MAX_NAME_LENGTH, PLAYER_COUNT } from '@red10/shared';
 
@@ -214,27 +223,69 @@ describe('handleReconnect — rotates token on every successful reconnect', () =
   });
 });
 
-describe('full attack scenario — the original vulnerability, now blocked', () => {
-  it('attacker who knows room code + display name cannot rejoin without the token', () => {
-    // Alice creates room and joins. She gets a token (stays on her client).
+describe('token-based rejoin remains strict — guessed/forged tokens still rejected', () => {
+  it('the token boundary is intact even though the join-by-name path exists alongside it', () => {
+    // Alice creates a room and disconnects. The token-based rejoin path
+    // (used by `room:rejoin` for automatic page-reload restores) must still
+    // require her actual token; the looser join-by-name path is a separate
+    // entry point and not tested here.
     const aliceSocket = freshSocketId('alice');
     const room = createRoom(aliceSocket, 'Alice');
-    // Attacker (Mallory) has no privileged access — just room code + name.
     handleDisconnect(aliceSocket);
 
-    // Attempt 1: Mallory emits rejoin with just {roomId, playerName}. Old API.
     expect(findDisconnectedPlayerForRejoin(room.id, 'Alice', undefined)).toBeNull();
-
-    // Attempt 2: Mallory tries a guessed 64-char hex.
     const guess = 'deadbeef'.repeat(8);
     expect(findDisconnectedPlayerForRejoin(room.id, 'Alice', guess)).toBeNull();
-
-    // Attempt 3: Mallory tries an empty string.
     expect(findDisconnectedPlayerForRejoin(room.id, 'Alice', '')).toBeNull();
 
-    // Alice (holding her actual token) CAN still reconnect.
+    // Alice (holding her actual token) CAN still reconnect via this path.
     const aliceToken = getRoom(room.id)!.players.get(aliceSocket)!.reconnectToken;
     expect(findDisconnectedPlayerForRejoin(room.id, 'Alice', aliceToken)).not.toBeNull();
+  });
+});
+
+describe('findDisconnectedPlayerByName — name+room rejoin policy', () => {
+  it('returns the disconnected player when name matches', () => {
+    const aliceSocket = freshSocketId('alice');
+    const room = createRoom(aliceSocket, 'Alice');
+    handleDisconnect(aliceSocket);
+
+    const hit = findDisconnectedPlayerByName(room.id, 'Alice');
+    expect(hit).not.toBeNull();
+    expect(hit!.player.name).toBe('Alice');
+    expect(hit!.oldSocketId).toBe(aliceSocket);
+  });
+
+  it('returns null when the matching player is still connected (cannot evict an active seat)', () => {
+    const aliceSocket = freshSocketId('alice');
+    const room = createRoom(aliceSocket, 'Alice');
+    // Alice is still connected — name match must NOT match her.
+    expect(findDisconnectedPlayerByName(room.id, 'Alice')).toBeNull();
+  });
+
+  it('returns null for an unknown name', () => {
+    const aliceSocket = freshSocketId('alice');
+    const room = createRoom(aliceSocket, 'Alice');
+    handleDisconnect(aliceSocket);
+    expect(findDisconnectedPlayerByName(room.id, 'Mallory')).toBeNull();
+  });
+
+  it('returns null for an unknown room', () => {
+    expect(findDisconnectedPlayerByName('ZZZZ', 'Alice')).toBeNull();
+  });
+
+  it('matches the disconnected slot even when other players in the same room are still connected', () => {
+    const aliceSocket = freshSocketId('alice');
+    const room = createRoom(aliceSocket, 'Alice');
+    const bobSocket = freshSocketId('bob');
+    joinRoom(room.id, bobSocket, 'Bob');
+    handleDisconnect(bobSocket);
+
+    // Alice is still connected (no match), Bob is disconnected (match).
+    expect(findDisconnectedPlayerByName(room.id, 'Alice')).toBeNull();
+    const hit = findDisconnectedPlayerByName(room.id, 'Bob');
+    expect(hit).not.toBeNull();
+    expect(hit!.oldSocketId).toBe(bobSocket);
   });
 });
 

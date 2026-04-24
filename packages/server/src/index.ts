@@ -1,6 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
-import { Server } from 'socket.io';
+import { Server, type Socket } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { ServerToClientEvents, ClientToServerEvents } from '@red10/shared';
@@ -12,6 +12,7 @@ import {
   handleDisconnect,
   handleReconnect,
   findDisconnectedPlayerForRejoin,
+  findDisconnectedPlayerByName,
   getPlayerList,
   getRoomForSocket,
   addBotToRoom,
@@ -23,6 +24,8 @@ import { GameEngine } from './game/GameEngine.js';
 import { BotManager } from './bot/BotManager.js';
 import { GameLogger } from './bot/GameLogger.js';
 import { pushGameLog } from './bot/GameLogPusher.js';
+
+type TypedSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 /** Active game engines, keyed by roomId */
 const games = new Map<string, GameEngine>();
@@ -537,6 +540,67 @@ if (process.env.SERVE_CLIENT === 'true') {
 }
 
 
+/**
+ * Shared post-reconnect plumbing for both rejoin paths (token-based via
+ * `room:rejoin` and name-based via `room:join`). Reassigns the socket id on
+ * the lobby + game engine, sends the rejoining client a fresh state snapshot,
+ * and broadcasts the socket-id swap to everyone else so their player list
+ * stops referencing the dead old socket.
+ */
+function completeRejoin(
+  socket: TypedSocket,
+  roomId: string,
+  oldSocketId: string,
+): { success: true; reconnectToken: string; playerName: string } | { success: false; error: string } {
+  const reconnectResult = handleReconnect(oldSocketId, socket.id!, roomId);
+  if (!reconnectResult) {
+    return { success: false, error: 'Could not reconnect: invalid session or expired' };
+  }
+  const { room, player: rejoinedPlayer } = reconnectResult;
+
+  void socket.join(roomId);
+
+  // If the game has started, swap the socket id inside the engine and ship
+  // the rejoining client an authoritative state snapshot.
+  const engine = games.get(roomId);
+  if (engine) {
+    engine.updatePlayerId(oldSocketId, socket.id!);
+    const view = engine.getClientView(socket.id!);
+    socket.emit('game:state', view);
+  }
+
+  // Replay the room roster to the rejoining client so they can rebuild lobby
+  // state from scratch (sessionStorage may have been wiped, this could be a
+  // brand-new tab, etc.).
+  const players = getPlayerList(room);
+  for (const p of players) {
+    socket.emit('room:player_joined', {
+      player: { id: p.id, name: p.name },
+      hostId: room.hostId,
+    });
+    if (p.isReady) {
+      socket.emit('room:player_ready', { playerId: p.id });
+    }
+  }
+
+  // Tell every OTHER socket in the room about the swap. Without this, their
+  // player lists keep pointing at the dead old socket id (they marked it
+  // disconnected on `room:player_left` and never get a paired update),
+  // so their UI shows the player as "Disconnected" forever and ready-state
+  // toggles fired by the new socket land on no one.
+  socket.to(roomId).emit('room:player_removed', { playerId: oldSocketId });
+  socket.to(roomId).emit('room:player_joined', {
+    player: { id: socket.id!, name: rejoinedPlayer.name },
+    hostId: room.hostId,
+  });
+
+  return {
+    success: true,
+    reconnectToken: rejoinedPlayer.reconnectToken,
+    playerName: rejoinedPlayer.name,
+  };
+}
+
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
@@ -567,37 +631,14 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const { room, oldSocketId } = found;
-    const reconnectResult = handleReconnect(oldSocketId, socket.id!, normalizedRoomId);
-    if (!reconnectResult) {
-      cb({ success: false, error: 'Could not reconnect: invalid session or expired' });
+    const result = completeRejoin(socket, normalizedRoomId, found.oldSocketId);
+    if (!result.success) {
+      cb({ success: false, error: result.error });
       return;
     }
-    const { player: rejoinedPlayer } = reconnectResult;
 
-    void socket.join(normalizedRoomId);
-
-    // Update game engine player ID if game is active
-    const engine = games.get(normalizedRoomId);
-    if (engine) {
-      engine.updatePlayerId(oldSocketId, socket.id!);
-      // Send full game state to reconnected player
-      const view = engine.getClientView(socket.id!);
-      socket.emit('game:state', view);
-    }
-
-    // Always send the current player list so the client can rebuild lobby state
-    const players = getPlayerList(room);
-    for (const p of players) {
-      socket.emit('room:player_joined', { player: { id: p.id, name: p.name }, hostId: room.hostId });
-      if (p.isReady) {
-        socket.emit('room:player_ready', { playerId: p.id });
-      }
-    }
-
-    console.log(`${playerName} (${socket.id}) rejoined room ${normalizedRoomId} (was ${oldSocketId})`);
-    // Hand back the rotated token so the client persists the new one.
-    cb({ success: true, reconnectToken: rejoinedPlayer.reconnectToken });
+    console.log(`${playerName} (${socket.id}) rejoined room ${normalizedRoomId} (was ${found.oldSocketId})`);
+    cb({ success: true, reconnectToken: result.reconnectToken });
   });
 
   socket.on('room:create', (data, cb) => {
@@ -627,8 +668,29 @@ io.on('connection', (socket) => {
       return;
     }
     const playerName = nameCheck.name;
+    const normalizedRoomId = data.roomId.toUpperCase();
 
-    const result = joinRoom(data.roomId.toUpperCase(), socket.id, playerName);
+    // Name-based rejoin: if this name matches a player who is currently
+    // disconnected, the user is reclaiming their seat (different browser,
+    // expired sessionStorage, etc.) — route through the rejoin pipeline so
+    // they get the live game state and we don't double-seat them. This is
+    // intentionally less strict than `room:rejoin` (no token check); the
+    // 4-char room code is the credential.
+    const rejoinTarget = findDisconnectedPlayerByName(normalizedRoomId, playerName);
+    if (rejoinTarget) {
+      const result = completeRejoin(socket, normalizedRoomId, rejoinTarget.oldSocketId);
+      if (!result.success) {
+        cb({ success: false, error: result.error });
+        return;
+      }
+      console.log(
+        `${playerName} (${socket.id}) rejoined-by-name in room ${normalizedRoomId} (was ${rejoinTarget.oldSocketId})`,
+      );
+      cb({ success: true, reconnectToken: result.reconnectToken });
+      return;
+    }
+
+    const result = joinRoom(normalizedRoomId, socket.id, playerName);
 
     if (!result.success) {
       cb({ success: false, error: result.error });

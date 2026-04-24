@@ -330,6 +330,32 @@ export function findDisconnectedPlayerForRejoin(
   return null;
 }
 
+/**
+ * Lower-bar match used by `room:join` so a player who lost their session
+ * (different browser, fresh tab, expired storage) can reclaim their seat by
+ * re-entering the same room code and display name. NO token check — by design.
+ *
+ * This is a deliberate UX-vs-security trade for a private friends-game: anyone
+ * who knows the 4-char room code AND a disconnected player's display name can
+ * take that seat. The room code is the credential. Use the token-based
+ * `findDisconnectedPlayerForRejoin` when a stored token IS available; this is
+ * the fallback for the "I just typed my name in" path.
+ */
+export function findDisconnectedPlayerByName(
+  roomId: string,
+  playerName: string,
+): { room: Room; oldSocketId: string; player: RoomPlayer } | null {
+  const room = rooms.get(roomId);
+  if (!room) return null;
+
+  for (const [socketId, player] of room.players.entries()) {
+    if (player.name !== playerName) continue;
+    if (player.isConnected) continue;
+    return { room, oldSocketId: socketId, player };
+  }
+  return null;
+}
+
 export function getPlayerList(room: Room): Array<{ id: string; name: string; seatIndex: number; isReady: boolean; isConnected: boolean }> {
   return [...room.players.values()]
     .sort((a, b) => a.seatIndex - b.seatIndex)
