@@ -227,7 +227,8 @@ export interface GameResult {
   scoringTeamWon: boolean;
   /** Opposing team members who still have cards */
   trapped: string[];
-  /** Dollar amount per trapped player per winning team member */
+  /** Stake unit per trapped player. Each opposing-team member owes
+   * `payoutPerTrapped × trapped.length` into the pool; winners split it. */
   payoutPerTrapped: number;
   /** Net dollar change for each player: playerId → amount (positive = earned, negative = paid) */
   payouts: Record<string, number>;
