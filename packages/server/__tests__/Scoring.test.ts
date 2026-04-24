@@ -530,6 +530,42 @@ describe('Scoring — integration via GameEngine', () => {
     expect(engine.getGameResult()).toBeNull();
   });
 
+  it('getClientView reveals every player\'s team once the game is over', () => {
+    // Regression: at game-over, the scoreboard groups players by team. If
+    // teams stay hidden for players who never publicly revealed a red 10,
+    // they get filtered out of both team rosters entirely (not just shown
+    // as "unknown"), and teammates can't see each other on the win screen.
+    const engine = createTestEngine();
+    const st = engine.getState() as any;
+    // Assign teams the way startGame would, but skip any red-10 reveal so
+    // every player's team is purely "hidden" until phase forces it open.
+    st.players[0].team = 'red10';
+    st.players[1].team = 'red10';
+    st.players[2].team = 'red10';
+    st.players[3].team = 'black10';
+    st.players[4].team = 'black10';
+    st.players[5].team = 'black10';
+    for (const p of st.players) p.revealedRed10Count = 0;
+
+    // Mid-game: only the viewer's own team is visible.
+    st.phase = 'playing';
+    const midView = engine.getClientView('p0');
+    const midOthers = midView.players.filter((p) => p.id !== 'p0');
+    expect(midOthers.every((p) => p.team === null)).toBe(true);
+
+    // Game over: every player's team becomes visible to every viewer.
+    st.phase = 'game_over';
+    for (const viewerId of ['p0', 'p1', 'p3', 'p5']) {
+      const view = engine.getClientView(viewerId);
+      expect(view.players.find((p) => p.id === 'p0')!.team).toBe('red10');
+      expect(view.players.find((p) => p.id === 'p1')!.team).toBe('red10');
+      expect(view.players.find((p) => p.id === 'p2')!.team).toBe('red10');
+      expect(view.players.find((p) => p.id === 'p3')!.team).toBe('black10');
+      expect(view.players.find((p) => p.id === 'p4')!.team).toBe('black10');
+      expect(view.players.find((p) => p.id === 'p5')!.team).toBe('black10');
+    }
+  });
+
   it('playAgain ignores unknown ids (e.g. a stale socket id from a reconnected player)', () => {
     // Regression test: previously, any id could be added to playAgainPlayerIds
     // and inflate the count beyond real players. This caused the engine to
