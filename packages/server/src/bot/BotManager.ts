@@ -623,10 +623,20 @@ function decideChaGo(
       checkIdx2 = (checkIdx2 + 1) % 6;
     }
 
+    // If the trigger play was by a known teammate, the go phase is risky:
+    // an opponent can counter and steal the trick. Require a stricter skip
+    // threshold for low-rank chas — only cha if bypassing someone truly about
+    // to go out (≤2 cards), not just any opponent in the skip window.
+    const triggerPlayer = state.players.find(p => p.id === lastPlayerId);
+    const triggerIsTeammate = !!(
+      triggerPlayer?.team && player.team && triggerPlayer.team === player.team
+    );
+
     // Skip an opponent about to go out — highest-value reason to cha.
-    // For HIGH ranks (A, 2), require an opponent with ≤2 cards (genuinely about to out).
-    // For lower ranks, ≤3 cards is enough.
-    const criticalThreshold = isHighRank ? 2 : 3;
+    // For HIGH ranks (A, 2): require ≤2 cards.
+    // For LOW ranks with teammate trigger: tighten to ≤2 (normal is ≤3).
+    // For LOW ranks without teammate trigger: ≤3 is fine.
+    const criticalThreshold = isHighRank || (triggerIsTeammate && !isMedRank) ? 2 : 3;
     const criticalOpponentSkipped = skippedPlayers.some(
       p => p.team !== player.team && p.handSize <= criticalThreshold,
     );
@@ -649,12 +659,14 @@ function decideChaGo(
       return 'decline';
     }
 
-    // LOW rank: skipping any opponent is worthwhile (cheap cha)
-    const anyOpponentSkipped = skippedPlayers.some(
-      p => p.team !== player.team,
-    );
-    if (anyOpponentSkipped) {
-      return 'cha';
+    // LOW rank: skipping any opponent is worthwhile (cheap cha) — unless the
+    // trigger was a teammate, in which case the ≤2 critical check above is the
+    // only justification (already handled).
+    if (!triggerIsTeammate) {
+      const anyOpponentSkipped = skippedPlayers.some(p => p.team !== player.team);
+      if (anyOpponentSkipped) {
+        return 'cha';
+      }
     }
   }
 
