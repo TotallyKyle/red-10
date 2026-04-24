@@ -2,6 +2,7 @@ import type { RoundInfo, ClientPlayerView, Play, Card as CardType } from '@red10
 import { RANK_ORDER } from '@red10/shared';
 import Card from './Card.js';
 import { useViewportWidth } from '../hooks/useViewport.js';
+import type { RoundEndDisplay } from '../hooks/useSocket.js';
 
 /** Sort cards by rank for display (low to high) */
 function sortByRank(cards: CardType[]): CardType[] {
@@ -11,6 +12,12 @@ function sortByRank(cards: CardType[]): CardType[] {
 interface PlayAreaProps {
   round: RoundInfo | null;
   players: ClientPlayerView[];
+  /**
+   * Transient snapshot of the winning cards after a cha-go round ends.
+   * The engine wipes round.lastPlay the instant the round transitions, so this
+   * keeps the winning play on the table for a few seconds.
+   */
+  roundEndDisplay?: RoundEndDisplay | null;
 }
 
 const FORMAT_LABELS: Record<string, string> = {
@@ -55,8 +62,12 @@ function getPlaySize(cardCount: number, viewportWidth: number): 'sm' | 'md' | 'l
   return 'sm';                      // 6+ cards (paired straights): small but fits
 }
 
-function PlayArea({ round, players }: PlayAreaProps) {
+function PlayArea({ round, players, roundEndDisplay }: PlayAreaProps) {
   const viewportWidth = useViewportWidth();
+
+  // Show the held winning cards from the just-ended cha-go round whenever the
+  // engine has already reset to a fresh round (no active lastPlay yet).
+  const showRoundEnd = !!roundEndDisplay && !round?.lastPlay;
 
   if (!round) {
     return (
@@ -109,17 +120,36 @@ function PlayArea({ round, players }: PlayAreaProps) {
         </div>
       )}
 
+      {/* Round-end banner — shown while the held cha-go cards are visible. */}
+      {showRoundEnd && roundEndDisplay && (
+        <span className="text-yellow-300 text-[10px] sm:text-xs font-bold uppercase tracking-wider animate-pulse">
+          {roundEndDisplay.type === 'go_cha' ? 'Go-Cha Won the Round!' : 'Round Won!'}
+        </span>
+      )}
+
       {/* Current play / main area */}
       <div
         className={`min-w-[160px] sm:min-w-[220px] min-h-[100px] sm:min-h-[130px] rounded-xl border-2 border-dashed flex items-center justify-center px-3 sm:px-5 py-3 transition-all duration-300 ${
-          currentPlay && isBombPlay(currentPlay)
-            ? isRedTenBomb(currentPlay)
-              ? 'border-red-500/80 bg-red-900/20 shadow-lg shadow-red-500/30'
-              : 'border-orange-500/80 bg-orange-900/20 shadow-lg shadow-orange-500/30'
-            : 'border-green-600/50'
+          showRoundEnd
+            ? 'border-yellow-400/80 bg-yellow-900/20 shadow-lg shadow-yellow-400/30'
+            : currentPlay && isBombPlay(currentPlay)
+              ? isRedTenBomb(currentPlay)
+                ? 'border-red-500/80 bg-red-900/20 shadow-lg shadow-red-500/30'
+                : 'border-orange-500/80 bg-orange-900/20 shadow-lg shadow-orange-500/30'
+              : 'border-green-600/50'
         }`}
       >
-        {lastPlay ? (
+        {showRoundEnd && roundEndDisplay ? (
+          <div className="flex items-center gap-0.5 sm:gap-1.5 animate-slide-in max-w-[calc(100vw_-_24px)]">
+            {sortByRank(roundEndDisplay.cards).map((card) => (
+              <Card
+                key={card.id}
+                card={card}
+                size={getPlaySize(roundEndDisplay.cards.length, viewportWidth)}
+              />
+            ))}
+          </div>
+        ) : lastPlay ? (
           <div className="flex items-center gap-0.5 sm:gap-1.5 animate-slide-in max-w-[calc(100vw_-_24px)]">
             {sortByRank(lastPlay.cards).map((card) => (
               <Card
@@ -134,8 +164,25 @@ function PlayArea({ round, players }: PlayAreaProps) {
         )}
       </div>
 
-      {/* Who played */}
-      {lastPlay && (
+      {/* Who played — shows the round-end winner during the hold, otherwise the current play owner. */}
+      {showRoundEnd && roundEndDisplay ? (
+        <span className="text-yellow-200 text-[10px] sm:text-xs inline-flex items-center gap-1">
+          {getPlayerName(players, roundEndDisplay.playerId)}
+          {(() => {
+            const team = getPlayerTeam(players, roundEndDisplay.playerId);
+            if (!team) return null;
+            return (
+              <span
+                className={`text-[9px] sm:text-[10px] font-bold px-1 sm:px-1.5 py-0.5 rounded-full ${
+                  team === 'red10' ? 'bg-red-600 text-white' : 'bg-gray-800 text-white'
+                }`}
+              >
+                {team === 'red10' ? 'RED' : 'BLK'}
+              </span>
+            );
+          })()}
+        </span>
+      ) : lastPlay && (
         <span className="text-green-200 text-[10px] sm:text-xs inline-flex items-center gap-1">
           {getPlayerName(players, lastPlay.playerId)}
           {(() => {

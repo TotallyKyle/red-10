@@ -6,6 +6,16 @@
   50% { box-shadow: 0 0 8px 4px rgba(250, 204, 21, 0.2); }
 }
 
+@keyframes your-turn-glow {
+  0%, 100% { box-shadow: 0 -8px 24px rgba(250, 204, 21, 0.35), inset 0 0 0 4px rgb(250, 204, 21); }
+  50%      { box-shadow: 0 -12px 40px rgba(250, 204, 21, 0.65), inset 0 0 0 4px rgb(253, 224, 71); }
+}
+
+@keyframes turn-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.8), 0 0 10px 2px rgba(250, 204, 21, 0.3); }
+  50%      { box-shadow: 0 0 0 6px rgba(250, 204, 21, 0), 0 0 16px 6px rgba(250, 204, 21, 0.5); }
+}
+
 @keyframes slide-in {
   from { opacity: 0; transform: translateY(10px) scale(0.95); }
   to { opacity: 1; transform: translateY(0) scale(1); }
@@ -18,6 +28,14 @@
 
 @utility animate-pulse-subtle {
   animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+@utility animate-your-turn-glow {
+  animation: your-turn-glow 1.6s ease-in-out infinite;
+}
+
+@utility animate-turn-ring {
+  animation: turn-ring 1.4s ease-in-out infinite;
 }
 
 @utility animate-slide-in {

@@ -38,7 +38,7 @@ const gameLoggers = new Map<string, GameLogger>();
 const botTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
 
 const TURN_TIMEOUT_MS = 30_000;
-const BOT_ACTION_DELAY = 2000;
+const BOT_ACTION_DELAY = 3000;
 const BOT_CHA_DELAY = 1500;
 
 /** Broadcast game state to all human players in the room (skips bots).
