@@ -577,11 +577,15 @@ function decideChaGo(
     }
   }
 
-  // Card counting: estimate how many copies remain in other players' hands
+  // Card counting: estimate how many copies remain in other players' hands.
+  // estimatePlayedCopies already sums the bot's own copies with copies played
+  // this round, so subtracting it once from totalCopies gives the remainder in
+  // other hands. A prior version subtracted `inMyHand` a second time, which
+  // under the ±1 miscount noise occasionally read as 0 — making the bot
+  // hallucinate a "winning cha" and burn power cards (e.g. 2s, aces).
   const totalCopies = 6; // 1.5 decks
-  const inMyHand = matchingCards.length;
   const estimatedKnown = estimatePlayedCopies(triggerRank, round, player.hand);
-  const estimatedRemaining = totalCopies - estimatedKnown - inMyHand;
+  const estimatedRemaining = totalCopies - estimatedKnown;
 
   // If we think no copies remain after our cha, we win the round!
   const afterChaRemaining = estimatedRemaining;
