@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { Card } from '@red10/shared';
 import { useSocket } from './hooks/useSocket.js';
+import { useTurnSound } from './hooks/useTurnSound.js';
 import Lobby from './components/Lobby.js';
 import GameTable from './components/GameTable.js';
 import DoublingPhase from './components/DoublingPhase.js';
@@ -14,6 +15,8 @@ function App() {
     gameLog, errorMessage, turnStartTime, downloadGameLog,
   } = socket;
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
+
+  useTurnSound(gameView?.isMyTurn);
 
   const handleToggleCard = useCallback((card: Card) => {
     setSelectedCards((prev) => {
