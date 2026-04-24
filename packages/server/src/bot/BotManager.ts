@@ -282,6 +282,12 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
   if (fmt === 'straight') score += 5;
   if (fmt === 'paired_straight') score += 8;
 
+  // Large-hand dump incentive: when stuck with ≥7 cards, prefer plays that shed
+  // 2+ cards at once to reduce trap risk.
+  if (hand.length >= 7 && cards.length >= 2) {
+    score += 6;
+  }
+
   return score;
 }
 
@@ -946,7 +952,18 @@ function smartPlayDecision(
 
       // --- P3: blocking dangerous opponents ---
       if (highThreat || isLastPlayerDangerous) {
-        // Still prefer the cheapest option, but play regardless of cost
+        // Conservative bomb use: avoid burning a triple against a non-bomb if a
+        // large-hand opponent (8+ cards) is still active — they likely have a
+        // bigger bomb and will outbid, making our burn wasteful.
+        if (
+          isBombPlay &&
+          cheapest.length === 3 &&
+          round.lastPlay.format !== 'bomb' &&
+          !tryingToExit &&
+          opponents.some(p => p.handSize >= 8)
+        ) {
+          return { action: 'pass' };
+        }
         return { action: 'play', cards: cheapest };
       }
 
