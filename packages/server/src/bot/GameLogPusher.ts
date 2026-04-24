@@ -95,25 +95,30 @@ interface PushOptions {
 
 /**
  * PUT a file to a GitHub repo via the Contents API.
- * Throws on non-2xx.
+ * Throws on non-2xx. Retries once on 409 — GitHub's branch ref has
+ * optimistic concurrency, so two writes landing close together will
+ * 409 the loser; a quick retry uses the now-current ref.
  */
 async function putFile(opts: PushOptions): Promise<void> {
   const url = `https://api.github.com/repos/${opts.repo}/contents/${encodeURIComponent(opts.path)}`;
-  const body = {
+  const body = JSON.stringify({
     message: opts.message,
     content: Buffer.from(opts.content, 'utf8').toString('base64'),
-  };
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${opts.token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
   });
-  if (!res.ok) {
+  const headers = {
+    Authorization: `Bearer ${opts.token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'Content-Type': 'application/json',
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const res = await fetch(url, { method: 'PUT', headers, body });
+    if (res.ok) return;
+    if (res.status === 409 && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 250 + Math.random() * 250));
+      continue;
+    }
     const text = await res.text().catch(() => '');
     throw new Error(`GitHub PUT ${opts.path} → ${res.status}: ${text.slice(0, 300)}`);
   }
@@ -160,21 +165,43 @@ export async function pushGameLog(args: {
 
     const message = `game ${basename} (${env})`;
 
-    // Two independent PUTs; run in parallel.
-    await Promise.all([
-      putFile({ token, repo, path: `${basename}.txt`, content: formatted, message }),
-      putFile({
+    // Sequence the writes — running in parallel on the same branch races
+    // GitHub's optimistic ref concurrency and 409s the loser, leaving the
+    // winner as an orphan. Write .json first because the reviewer needs
+    // it (player types, teams, starting hands); skip .txt entirely if
+    // .json fails so the repo never accumulates orphan transcripts.
+    try {
+      await putFile({
         token,
         repo,
         path: `${basename}.json`,
         content: JSON.stringify(sidecar, null, 2),
         message,
-      }),
-    ]);
-    console.log(`[GameLogPusher] pushed ${basename} to ${repo} (${env})`);
+      });
+      console.log(`[GameLogPusher] pushed ${basename}.json to ${repo} (${env})`);
+    } catch (err) {
+      console.error(
+        `[GameLogPusher] json push failed for room=${args.roomId}: ${
+          err instanceof Error ? err.stack ?? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+
+    try {
+      await putFile({ token, repo, path: `${basename}.txt`, content: formatted, message });
+      console.log(`[GameLogPusher] pushed ${basename}.txt to ${repo} (${env})`);
+    } catch (err) {
+      // .json already landed, so the game is reviewable. Log + move on.
+      console.error(
+        `[GameLogPusher] txt push failed for room=${args.roomId} (json already written): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   } catch (err) {
     console.error(
-      `[GameLogPusher] push failed for room=${args.roomId}: ${
+      `[GameLogPusher] unexpected failure for room=${args.roomId}: ${
         err instanceof Error ? err.stack ?? err.message : String(err)
       }`,
     );
