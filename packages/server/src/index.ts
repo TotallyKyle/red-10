@@ -21,6 +21,7 @@ import type { Room } from './lobby.js';
 import { GameEngine } from './game/GameEngine.js';
 import { BotManager } from './bot/BotManager.js';
 import { GameLogger } from './bot/GameLogger.js';
+import { pushGameLog } from './bot/GameLogPusher.js';
 
 /** Active game engines, keyed by roomId */
 const games = new Map<string, GameEngine>();
@@ -38,7 +39,7 @@ const gameLoggers = new Map<string, GameLogger>();
 const botTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
 
 const TURN_TIMEOUT_MS = 30_000;
-const BOT_ACTION_DELAY = 3000;
+const BOT_ACTION_DELAY = 2000;
 const BOT_CHA_DELAY = 1500;
 
 /** Broadcast game state to all human players in the room (skips bots).
@@ -273,6 +274,7 @@ function executeBotAction(roomId: string, botId: string, engine: GameEngine, roo
         if (logger) {
           logger.logGameEnd(engine);
           broadcastLogEntry(roomId, room, logger);
+          void pushGameLog({ roomId, engine, logger, botManager });
         }
         clearTurnTimer(roomId);
         broadcastState(roomId, room, engine);
@@ -974,6 +976,7 @@ io.on('connection', (socket) => {
       if (logger) {
         logger.logGameEnd(engine);
         broadcastLogEntry(room.id, room, logger);
+        void pushGameLog({ roomId: room.id, engine, logger, botManager });
       }
       clearTurnTimer(room.id);
       broadcastState(room.id, room, engine);

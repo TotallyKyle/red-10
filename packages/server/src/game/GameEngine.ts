@@ -39,6 +39,10 @@ export class GameEngine {
   private gameResult: GameResult | null = null;
   /** Player IDs who want to play again */
   private playAgainPlayerIds: Set<string> = new Set();
+  /** Snapshot of each player's hand right after deal, for post-game review */
+  private startingHands: Map<string, Card[]> = new Map();
+  /** Epoch ms when the current game was dealt */
+  private gameStartTime: number = 0;
 
   constructor(roomId: string, players: PlayerInit[]) {
     const playerStates: PlayerState[] = players.map((p) => ({
@@ -82,11 +86,15 @@ export class GameEngine {
     // Sort players by seatIndex to assign hands in seat order
     const sortedPlayers = [...this.state.players].sort((a, b) => a.seatIndex - b.seatIndex);
 
+    this.startingHands.clear();
     for (let i = 0; i < sortedPlayers.length; i++) {
       const player = this.state.players.find((p) => p.id === sortedPlayers[i].id)!;
       player.hand = hands[i];
       player.handSize = hands[i].length;
+      // Snapshot starting hand (deep-copy cards so later plays don't mutate it)
+      this.startingHands.set(player.id, hands[i].map((c) => ({ ...c })));
     }
+    this.gameStartTime = Date.now();
 
     // Assign teams based on red 10 ownership
     for (const player of this.state.players) {
@@ -1416,6 +1424,18 @@ export class GameEngine {
    */
   getGameResult(): GameResult | null {
     return this.gameResult;
+  }
+
+  /** Snapshot of each player's hand at deal time, keyed by playerId. */
+  getStartingHands(): Record<string, Card[]> {
+    const out: Record<string, Card[]> = {};
+    for (const [id, hand] of this.startingHands) out[id] = hand;
+    return out;
+  }
+
+  /** Epoch ms when the current game was dealt. */
+  getGameStartTime(): number {
+    return this.gameStartTime;
   }
 
   /**
