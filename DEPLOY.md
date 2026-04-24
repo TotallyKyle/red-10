@@ -180,6 +180,31 @@ Railway gives $5/mo credit; a tiny instance costs about that.
 
 ---
 
+## Bot review pipeline (optional)
+
+The server can push every finished game's log + a structured JSON sidecar to a
+private logs repo, where a Claude routine picks them up and posts a review
+(see `.plans/review-pipeline.md`). If any of these three env vars is unset,
+log pushing is a no-op and the game still plays normally.
+
+```bash
+# 1. Create the private logs repo
+gh repo create TotallyKyle/red-10-logs --private
+
+# 2. Make a fine-grained PAT scoped to that ONE repo with
+#    "Contents: read and write". Copy the token.
+
+# 3a. Fly: set as secrets
+fly secrets set -a red-10 \
+  GITHUB_TOKEN=ghp_xxx \
+  LOGS_REPO=TotallyKyle/red-10-logs \
+  ENV_LABEL=fly
+
+# 3b. Local: add to .env (see .env.example)
+```
+
+---
+
 ## Local verification before deploying
 
 ```bash
