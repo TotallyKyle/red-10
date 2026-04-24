@@ -889,7 +889,9 @@ export class GameEngine {
       throw new Error(`Player ${playerId} not found in game ${this.state.id}`);
     }
 
-    const teamsRevealed = this.state.doubling?.teamsRevealed ?? false;
+    const teamsRevealed =
+      (this.state.doubling?.teamsRevealed ?? false) ||
+      this.state.phase === 'game_over';
     const playerViews: ClientPlayerView[] = this.state.players.map((p) => ({
       id: p.id,
       name: p.name,
@@ -897,7 +899,8 @@ export class GameEngine {
       handSize: p.handSize,
       isOut: p.isOut,
       finishOrder: p.finishOrder,
-      // Other players' teams are hidden unless revealed (revealedRed10Count > 0 or teamsRevealed via doubling)
+      // Other players' teams are hidden unless revealed (revealedRed10Count > 0,
+      // teamsRevealed via doubling, or the game has ended).
       team: p.id === playerId ? p.team : (teamsRevealed || p.revealedRed10Count > 0 ? p.team : null),
       revealedRed10Count: p.revealedRed10Count,
       isConnected: p.isConnected,
