@@ -11,7 +11,7 @@ function App() {
   const {
     gameView, mySocketId, playCards, passAction, defuseAction, chaAction, goChaAction, declineChaAction,
     declareDouble, skipDoubleAction, declareQuadruple, skipQuadrupleAction, playAgain,
-    gameLog, errorMessage, turnStartTime, downloadGameLog, roundEndDisplay,
+    gameLog, errorMessage, turnStartTime, downloadGameLog,
   } = socket;
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
 
@@ -124,7 +124,6 @@ function App() {
         errorMessage={errorMessage}
         turnStartTime={turnStartTime}
         onRequestLog={downloadGameLog}
-        roundEndDisplay={roundEndDisplay}
       />
     );
   }

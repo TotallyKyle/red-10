@@ -1,6 +1,7 @@
 import type {
   GameState,
   GameResult,
+  LastRoundWin,
   PlayerState,
   ClientGameView,
   ClientPlayerView,
@@ -69,6 +70,23 @@ export class GameEngine {
       finishOrder: [],
       scoringTeam: null,
       previousGameWinner: null,
+      lastRoundWin: null,
+    };
+  }
+
+  /**
+   * Capture the play that just won a round so the UI can keep it on the
+   * table after the engine resets to a fresh round. Cleared when the next
+   * round's first card is played (see playCards).
+   */
+  private captureRoundWin(winnerId: string, endedByChaGo: boolean): void {
+    const last = this.state.round?.lastPlay;
+    if (!last) return;
+    this.state.lastRoundWin = {
+      winnerId,
+      cards: last.cards,
+      format: last.format,
+      endedByChaGo,
     };
   }
 
@@ -421,6 +439,11 @@ export class GameEngine {
       return { success: false, error: 'Invalid card combination' };
     }
 
+    // The first play of a new round means the previous round's winning-play
+    // hold is no longer needed. Clear here (after validation, so a rejected
+    // play doesn't accidentally hide the snapshot).
+    this.state.lastRoundWin = null;
+
     // During cha-go waiting_go phase, validate the card is a single of the trigger rank
     if (round.chaGoState && round.chaGoState.phase === 'waiting_go') {
       if (actualCards.length !== 1 || actualCards[0].rank !== round.chaGoState.triggerRank) {
@@ -678,6 +701,9 @@ export class GameEngine {
       // Round is over - start a new round
       // The winner is the player who made the last play
       const winnerId = round.lastPlay.playerId;
+
+      // Capture the winning play before startNewRound wipes round.lastPlay.
+      this.captureRoundWin(winnerId, false);
 
       // If the winner is out, the next active player leads
       const winnerIsOut = this.state.players.find((p) => p.id === winnerId)?.isOut ?? false;
@@ -956,6 +982,7 @@ export class GameEngine {
       myTeam,
       finishOrder: this.state.finishOrder,
       scoringTeam: this.state.scoringTeam,
+      lastRoundWin: this.state.lastRoundWin,
     };
 
     if (this.gameResult) {
@@ -1382,6 +1409,9 @@ export class GameEngine {
     const round = this.state.round;
     if (!round) return;
 
+    // Capture the winning play before startNewRound wipes round.lastPlay.
+    this.captureRoundWin(winnerId, true);
+
     round.chaGoState = null;
 
     const winnerIsOut = this.state.players.find((p) => p.id === winnerId)?.isOut ?? false;
@@ -1491,6 +1521,7 @@ export class GameEngine {
     this.state.stakeMultiplier = 1;
     this.state.round = null;
     this.state.previousGameWinner = previousWinner;
+    this.state.lastRoundWin = null;
     this.gameResult = null;
     this.playAgainPlayerIds.clear();
     this.quadrupleSkipped.clear();

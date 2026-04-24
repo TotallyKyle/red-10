@@ -26,20 +26,6 @@ export interface GameLogEntry {
   message: string;
 }
 
-/**
- * The cards + player that just resolved the previous round. Rendered in the
- * center play area so a go-cha winner doesn't vanish the instant the engine
- * starts the next round. `type` distinguishes sources for future overlays;
- * only 'go_cha' is emitted today.
- */
-export interface RoundEndDisplay {
-  cards: Card[];
-  playerId: string;
-  type: 'go_cha';
-}
-
-const ROUND_END_HOLD_MS = 3500;
-
 export interface UseSocketReturn {
   isConnected: boolean;
   roomState: RoomState | null;
@@ -66,8 +52,6 @@ export interface UseSocketReturn {
   downloadGameLog: () => void;
   mySocketId: string | null;
   turnStartTime: number | null;
-  /** Non-null briefly after a cha-go win so the PlayArea can show the winning cards. */
-  roundEndDisplay: RoundEndDisplay | null;
 }
 
 // Helper to resolve a player name from the game view
@@ -98,8 +82,6 @@ export function useSocket(): UseSocketReturn {
   const [mySocketId, setMySocketId] = useState<string | null>(null);
   const [gameLog, setGameLog] = useState<GameLogEntry[]>([]);
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
-  const [roundEndDisplay, setRoundEndDisplay] = useState<RoundEndDisplay | null>(null);
-  const roundEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Track players and ready states locally since server sends incremental events
   const playersRef = useRef<RoomPlayer[]>([]);
@@ -273,15 +255,6 @@ export function useSocket(): UseSocketReturn {
       } else {
         setTurnStartTime(null);
       }
-      // A new play landed in the next round — clear the round-end overlay
-      // early rather than waiting out the hold timer.
-      if (view.round?.lastPlay) {
-        if (roundEndTimerRef.current) {
-          clearTimeout(roundEndTimerRef.current);
-          roundEndTimerRef.current = null;
-        }
-        setRoundEndDisplay(null);
-      }
     });
 
     socket.on('game:update', (view) => {
@@ -348,15 +321,6 @@ export function useSocket(): UseSocketReturn {
       const gv = gameViewRef.current;
       const name = getPlayerName(gv, data.playerId);
       setGameLog((prev) => [...prev, { id: ++logIdRef.current, timestamp: Date.now(), type: 'cha_go', message: `${name} played Go-Cha!` }]);
-      // The engine wipes round.lastPlay the instant the go-cha resolves, so
-      // without this the winning cards would disappear from the table before
-      // anyone could read them. Hold them locally for a few seconds.
-      if (roundEndTimerRef.current) clearTimeout(roundEndTimerRef.current);
-      setRoundEndDisplay({ cards: data.cards, playerId: data.playerId, type: 'go_cha' });
-      roundEndTimerRef.current = setTimeout(() => {
-        setRoundEndDisplay(null);
-        roundEndTimerRef.current = null;
-      }, ROUND_END_HOLD_MS);
     });
 
     socket.on('double:declared', (data) => {
@@ -381,10 +345,6 @@ export function useSocket(): UseSocketReturn {
 
     return () => {
       socket.disconnect();
-      if (roundEndTimerRef.current) {
-        clearTimeout(roundEndTimerRef.current);
-        roundEndTimerRef.current = null;
-      }
     };
   }, [updateRoomState]);
 
@@ -611,6 +571,5 @@ export function useSocket(): UseSocketReturn {
     downloadGameLog,
     mySocketId,
     turnStartTime,
-    roundEndDisplay,
   };
 }

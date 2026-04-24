@@ -135,6 +135,20 @@ export type GamePhase = 'lobby' | 'dealing' | 'doubling' | 'playing' | 'scoring'
 
 export type Team = 'red10' | 'black10';
 
+/**
+ * Snapshot of the play that won the previous round. Set when a round ends
+ * (whether via everyone passing or a cha-go resolution) and cleared when the
+ * next round's first card is played. Lets the UI keep the winning cards
+ * visible after the engine has reset to a fresh round.
+ */
+export interface LastRoundWin {
+  winnerId: string;
+  cards: Card[];
+  format: PlayFormat;
+  /** Whether the round ended via a cha-go resolution (vs everyone passing). */
+  endedByChaGo: boolean;
+}
+
 export interface GameState {
   /** Unique game/room ID */
   id: string;
@@ -152,6 +166,8 @@ export interface GameState {
   scoringTeam: Team | null;
   /** Winner of the previous game, determines who goes first */
   previousGameWinner: string | null;
+  /** Most recent round-winning play; lingers until the next round's first card. */
+  lastRoundWin: LastRoundWin | null;
 }
 
 // ---- Client view (what each player sees) ----
@@ -200,6 +216,8 @@ export interface ClientGameView {
   gameResult?: GameResult;
   /** How many players are ready to play again */
   playAgainCount?: number;
+  /** The play that won the previous round, for UI to keep on the table briefly. */
+  lastRoundWin: LastRoundWin | null;
 }
 
 // ---- Scoring ----

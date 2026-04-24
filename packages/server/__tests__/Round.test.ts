@@ -341,3 +341,102 @@ describe('Scoring team', () => {
     expect(state.scoringTeam).toBe(p0Team);
   });
 });
+
+describe('lastRoundWin snapshot', () => {
+  it('captures the winning play after everyone passes (normal round end)', () => {
+    const hands: Card[][] = [
+      [card('A', 'hearts', true), card('3', 'hearts', true)],
+      [card('4', 'hearts', true), card('5', 'hearts', true)],
+      [card('6', 'hearts', true), card('7', 'hearts', true)],
+      [card('8', 'hearts', true), card('9', 'hearts', true)],
+      [card('J', 'hearts', true), card('Q', 'hearts', true)],
+      [card('K', 'hearts', true), card('10', 'diamonds', true)],
+    ];
+    const engine = createEngineWithHands(hands);
+
+    expect(engine.getState().lastRoundWin).toBeNull();
+
+    engine.playCards('p0', [card('A', 'hearts', true)]);
+    engine.pass('p1');
+    engine.pass('p2');
+    engine.pass('p3');
+    engine.pass('p4');
+    engine.pass('p5');
+
+    const state = engine.getState();
+    expect(state.lastRoundWin).not.toBeNull();
+    expect(state.lastRoundWin!.winnerId).toBe('p0');
+    expect(state.lastRoundWin!.cards).toHaveLength(1);
+    expect(state.lastRoundWin!.cards[0].rank).toBe('A');
+    expect(state.lastRoundWin!.format).toBe('single');
+    expect(state.lastRoundWin!.endedByChaGo).toBe(false);
+    // The new round has reset round.lastPlay to null — without the snapshot
+    // the UI would have nothing to render.
+    expect(state.round?.lastPlay).toBeNull();
+  });
+
+  it("clears the snapshot on the next round's first play", () => {
+    const hands: Card[][] = [
+      [card('A', 'hearts', true), card('3', 'hearts', true)],
+      [card('4', 'hearts', true), card('5', 'hearts', true)],
+      [card('6', 'hearts', true), card('7', 'hearts', true)],
+      [card('8', 'hearts', true), card('9', 'hearts', true)],
+      [card('J', 'hearts', true), card('Q', 'hearts', true)],
+      [card('K', 'hearts', true), card('10', 'diamonds', true)],
+    ];
+    const engine = createEngineWithHands(hands);
+
+    engine.playCards('p0', [card('A', 'hearts', true)]);
+    engine.pass('p1');
+    engine.pass('p2');
+    engine.pass('p3');
+    engine.pass('p4');
+    engine.pass('p5');
+
+    expect(engine.getState().lastRoundWin).not.toBeNull();
+
+    // p0 (round winner) leads the next round
+    engine.playCards('p0', [card('3', 'hearts', true)]);
+
+    expect(engine.getState().lastRoundWin).toBeNull();
+  });
+
+  it('marks endedByChaGo=true when a cha-go resolves the round', () => {
+    // p0 leads a 5. p1 chas with a pair of 5s. No one can go (no other
+    // singles of 5 available). Everyone passes during waiting_go → cha
+    // player (p1) wins via endChaGoRound.
+    const hands: Card[][] = [
+      [card('5', 'hearts', true), card('A', 'hearts', true)],
+      [card('5', 'spades', false), card('5', 'clubs', false), card('K', 'hearts', true)],
+      [card('6', 'hearts', true), card('7', 'hearts', true)],
+      [card('8', 'hearts', true), card('9', 'hearts', true)],
+      [card('J', 'hearts', true), card('Q', 'hearts', true)],
+      [card('K', 'clubs', false), card('10', 'diamonds', true)],
+    ];
+    const engine = createEngineWithHands(hands);
+
+    engine.playCards('p0', [card('5', 'hearts', true)]);
+    engine.cha('p1', [card('5', 'spades', false), card('5', 'clubs', false)]);
+
+    // In waiting_go phase. The current player loops through active players
+    // (excluding the cha player p1) and they all pass since no one has a 5.
+    // After everyone passes the cha player wins.
+    const state0 = engine.getState();
+    if (state0.round?.chaGoState?.phase === 'waiting_go') {
+      // Pass through every non-cha player, starting from currentPlayerId.
+      while (engine.getState().round?.chaGoState?.phase === 'waiting_go') {
+        const cur = engine.getState().round!.currentPlayerId;
+        engine.pass(cur);
+      }
+    }
+
+    const state = engine.getState();
+    expect(state.lastRoundWin).not.toBeNull();
+    expect(state.lastRoundWin!.endedByChaGo).toBe(true);
+    expect(state.lastRoundWin!.winnerId).toBe('p1');
+    // The pair of 5s is what p1 played to win.
+    expect(state.lastRoundWin!.cards.length).toBeGreaterThan(0);
+    // The new round has reset round.lastPlay to null.
+    expect(state.round?.lastPlay).toBeNull();
+  });
+});

@@ -1,8 +1,7 @@
-import type { RoundInfo, ClientPlayerView, Play, Card as CardType } from '@red10/shared';
+import type { RoundInfo, ClientPlayerView, Play, Card as CardType, LastRoundWin } from '@red10/shared';
 import { RANK_ORDER } from '@red10/shared';
 import Card from './Card.js';
 import { useViewportWidth } from '../hooks/useViewport.js';
-import type { RoundEndDisplay } from '../hooks/useSocket.js';
 
 /** Sort cards by rank for display (low to high) */
 function sortByRank(cards: CardType[]): CardType[] {
@@ -13,11 +12,11 @@ interface PlayAreaProps {
   round: RoundInfo | null;
   players: ClientPlayerView[];
   /**
-   * Transient snapshot of the winning cards after a cha-go round ends.
-   * The engine wipes round.lastPlay the instant the round transitions, so this
-   * keeps the winning play on the table for a few seconds.
+   * Snapshot of the play that won the previous round. The engine wipes
+   * round.lastPlay the instant the round ends (cha-go or all-pass), so this
+   * is what keeps the winning cards on the table until the next play lands.
    */
-  roundEndDisplay?: RoundEndDisplay | null;
+  lastRoundWin?: LastRoundWin | null;
 }
 
 const FORMAT_LABELS: Record<string, string> = {
@@ -62,12 +61,13 @@ function getPlaySize(cardCount: number, viewportWidth: number): 'sm' | 'md' | 'l
   return 'sm';                      // 6+ cards (paired straights): small but fits
 }
 
-function PlayArea({ round, players, roundEndDisplay }: PlayAreaProps) {
+function PlayArea({ round, players, lastRoundWin }: PlayAreaProps) {
   const viewportWidth = useViewportWidth();
 
-  // Show the held winning cards from the just-ended cha-go round whenever the
-  // engine has already reset to a fresh round (no active lastPlay yet).
-  const showRoundEnd = !!roundEndDisplay && !round?.lastPlay;
+  // Render the previous round's winning play whenever the engine has already
+  // reset to a fresh round (no active lastPlay yet) but the snapshot is still
+  // attached. The engine clears the snapshot on the next round's first play.
+  const showRoundEnd = !!lastRoundWin && !round?.lastPlay;
 
   if (!round) {
     return (
@@ -120,10 +120,10 @@ function PlayArea({ round, players, roundEndDisplay }: PlayAreaProps) {
         </div>
       )}
 
-      {/* Round-end banner — shown while the held cha-go cards are visible. */}
-      {showRoundEnd && roundEndDisplay && (
+      {/* Round-end banner — shown while the previous winning play is held on the table. */}
+      {showRoundEnd && lastRoundWin && (
         <span className="text-yellow-300 text-[10px] sm:text-xs font-bold uppercase tracking-wider animate-pulse">
-          {roundEndDisplay.type === 'go_cha' ? 'Go-Cha Won the Round!' : 'Round Won!'}
+          {lastRoundWin.endedByChaGo ? 'Cha-Go Round Won!' : 'Round Won!'}
         </span>
       )}
 
@@ -139,13 +139,13 @@ function PlayArea({ round, players, roundEndDisplay }: PlayAreaProps) {
               : 'border-green-600/50'
         }`}
       >
-        {showRoundEnd && roundEndDisplay ? (
+        {showRoundEnd && lastRoundWin ? (
           <div className="flex items-center gap-0.5 sm:gap-1.5 animate-slide-in max-w-[calc(100vw_-_24px)]">
-            {sortByRank(roundEndDisplay.cards).map((card) => (
+            {sortByRank(lastRoundWin.cards).map((card) => (
               <Card
                 key={card.id}
                 card={card}
-                size={getPlaySize(roundEndDisplay.cards.length, viewportWidth)}
+                size={getPlaySize(lastRoundWin.cards.length, viewportWidth)}
               />
             ))}
           </div>
@@ -165,11 +165,11 @@ function PlayArea({ round, players, roundEndDisplay }: PlayAreaProps) {
       </div>
 
       {/* Who played — shows the round-end winner during the hold, otherwise the current play owner. */}
-      {showRoundEnd && roundEndDisplay ? (
+      {showRoundEnd && lastRoundWin ? (
         <span className="text-yellow-200 text-[10px] sm:text-xs inline-flex items-center gap-1">
-          {getPlayerName(players, roundEndDisplay.playerId)}
+          {getPlayerName(players, lastRoundWin.winnerId)}
           {(() => {
-            const team = getPlayerTeam(players, roundEndDisplay.playerId);
+            const team = getPlayerTeam(players, lastRoundWin.winnerId);
             if (!team) return null;
             return (
               <span
@@ -181,6 +181,7 @@ function PlayArea({ round, players, roundEndDisplay }: PlayAreaProps) {
               </span>
             );
           })()}
+          <span className="text-yellow-300/80 ml-0.5">won the round</span>
         </span>
       ) : lastPlay && (
         <span className="text-green-200 text-[10px] sm:text-xs inline-flex items-center gap-1">
