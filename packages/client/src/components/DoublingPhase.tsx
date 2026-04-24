@@ -14,15 +14,18 @@ const CARD_WIDTH: Record<'sm' | 'md' | 'lg' | 'xl', number> = {
  * cards fit the mobile viewport.
  */
 function getDoublingHandLayout(cardCount: number, viewportWidth: number) {
-  const isMobile = viewportWidth < 640;
+  const isCompact = viewportWidth < 1024;
 
-  if (isMobile) {
-    const available = Math.max(280, viewportWidth - 20);
-    const size: 'sm' | 'md' | 'lg' | 'xl' =
-      cardCount <= 5 ? 'xl' :
-      cardCount <= 7 ? 'lg' :
-      cardCount <= 13 ? 'md' :
-      'sm';
+  if (isCompact) {
+    const available = Math.max(280, viewportWidth - 32);
+    const widths: Array<'xl' | 'lg' | 'md' | 'sm'> = ['xl', 'lg', 'md', 'sm'];
+    let size: 'sm' | 'md' | 'lg' | 'xl' = 'sm';
+    for (const candidate of widths) {
+      const w = CARD_WIDTH[candidate];
+      const minExposed = Math.max(18, Math.floor(w * 0.35));
+      const required = w + Math.max(0, cardCount - 1) * minExposed;
+      if (required <= available) { size = candidate; break; }
+    }
     const w = CARD_WIDTH[size];
     if (cardCount <= 1) return { size, withinOverlap: 0, groupGap: 0 };
     const minExposed = Math.max(18, Math.floor(w * 0.35));
@@ -33,7 +36,7 @@ function getDoublingHandLayout(cardCount: number, viewportWidth: number) {
     return { size, withinOverlap: overlap, groupGap: overlap };
   }
 
-  // Desktop.
+  // Desktop (≥1024).
   if (cardCount <= 9) return { size: 'lg' as const, withinOverlap: -14, groupGap: 10 };
   return { size: 'md' as const, withinOverlap: -18, groupGap: 6 };
 }
@@ -73,6 +76,25 @@ function groupByRank(sorted: CardType[]): CardType[][] {
   }
   if (currentGroup.length > 0) groups.push(currentGroup);
   return groups;
+}
+
+/** Mirror of PlayerHand's splitGroupsIntoRows — keep ranks intact. */
+function splitGroupsIntoRows(groups: CardType[][], numRows: number): CardType[][][] {
+  if (numRows <= 1) return [groups];
+  const total = groups.reduce((s, g) => s + g.length, 0);
+  const target = Math.ceil(total / numRows);
+  const rows: CardType[][][] = Array.from({ length: numRows }, () => []);
+  let rowIdx = 0;
+  let running = 0;
+  for (const group of groups) {
+    rows[rowIdx].push(group);
+    running += group.length;
+    if (running >= target && rowIdx < numRows - 1) {
+      rowIdx++;
+      running = 0;
+    }
+  }
+  return rows.filter((r) => r.length > 0);
 }
 
 // ---- Main Component ----
@@ -124,6 +146,8 @@ function DoublingPhase({
   const groups = groupByRank(sorted);
   const selectedIds = new Set(selectedBombCards.map((c) => c.id));
   const viewportWidth = useViewportWidth();
+  const splitRows = viewportWidth < 640 && sorted.length > 9 ? 2 : 1;
+  const rowsOfGroups = splitGroupsIntoRows(groups, splitRows);
   const handLayout = getDoublingHandLayout(sorted.length, viewportWidth);
 
   return (
@@ -256,53 +280,62 @@ function DoublingPhase({
         <h3 className="text-emerald-300/70 text-xs font-semibold uppercase tracking-wider text-center mb-3">
           Your Hand
         </h3>
-        <div className="flex justify-center items-end pb-2 px-2 sm:px-4 w-full">
-          <div className="flex items-end max-w-full">
-            {groups.map((group, groupIdx) => (
-              <div
-                key={group[0].rank + '-' + groupIdx}
-                className="flex items-end"
-                style={{ marginLeft: groupIdx === 0 ? 0 : `${handLayout.groupGap}px` }}
-              >
-                {group.map((card, cardIdx) => {
-                  const isSelected = selectedIds.has(card.id);
-                  // For black10 team, clicking selects for bomb reveal
-                  const canSelect = isMyTurn && !isQuadruplePhase && myTeam === 'black10';
-                  return (
-                    <div
-                      key={card.id}
-                      className="transition-all duration-150 hover:-translate-y-2 hover:z-50"
-                      style={{
-                        marginLeft: cardIdx === 0 ? 0 : `${handLayout.withinOverlap}px`,
-                        zIndex: cardIdx,
-                      }}
-                    >
-                      <Card
-                        card={card}
-                        selected={isSelected}
-                        onClick={canSelect ? () => handleToggleBombCard(card) : undefined}
-                        size={handLayout.size}
-                      />
-                    </div>
-                  );
-                })}
-
-                {/* Rank count badge — hidden on mobile (preserves the uniform-step layout). */}
-                {group.length >= 2 && (
+        <div className="flex flex-col items-center pb-2 px-2 sm:px-4 w-full gap-1">
+          {rowsOfGroups.map((rowGroups, rowIdx) => {
+            const rowCardCount = rowGroups.reduce((s, g) => s + g.length, 0);
+            const rowLayout =
+              rowsOfGroups.length > 1
+                ? getDoublingHandLayout(rowCardCount, viewportWidth)
+                : handLayout;
+            return (
+              <div key={rowIdx} className="flex items-end max-w-full">
+                {rowGroups.map((group, groupIdx) => (
                   <div
-                    className={`hidden sm:flex relative -ml-3 mb-1 z-50 items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
-                      group.length >= 3
-                        ? 'bg-amber-500 text-black'
-                        : 'bg-green-600/80 text-white'
-                    }`}
-                    title={group.length >= 3 ? `${group.length}× bomb!` : `${group.length}× pair`}
+                    key={group[0].rank + '-' + rowIdx + '-' + groupIdx}
+                    className="flex items-end"
+                    style={{ marginLeft: groupIdx === 0 ? 0 : `${rowLayout.groupGap}px` }}
                   >
-                    {group.length}
+                    {group.map((card, cardIdx) => {
+                      const isSelected = selectedIds.has(card.id);
+                      // For black10 team, clicking selects for bomb reveal
+                      const canSelect = isMyTurn && !isQuadruplePhase && myTeam === 'black10';
+                      return (
+                        <div
+                          key={card.id}
+                          className="transition-all duration-150 hover:-translate-y-2 hover:z-50"
+                          style={{
+                            marginLeft: cardIdx === 0 ? 0 : `${rowLayout.withinOverlap}px`,
+                            zIndex: cardIdx,
+                          }}
+                        >
+                          <Card
+                            card={card}
+                            selected={isSelected}
+                            onClick={canSelect ? () => handleToggleBombCard(card) : undefined}
+                            size={rowLayout.size}
+                          />
+                        </div>
+                      );
+                    })}
+
+                    {/* Rank count badge — hidden on mobile (preserves the uniform-step layout). */}
+                    {group.length >= 2 && (
+                      <div
+                        className={`hidden sm:flex relative -ml-3 mb-1 z-50 items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
+                          group.length >= 3
+                            ? 'bg-amber-500 text-black'
+                            : 'bg-green-600/80 text-white'
+                        }`}
+                        title={group.length >= 3 ? `${group.length}× bomb!` : `${group.length}× pair`}
+                      >
+                        {group.length}
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       </div>
     </div>

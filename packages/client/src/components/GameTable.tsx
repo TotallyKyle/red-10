@@ -66,12 +66,15 @@ const POSITIONS = [
  * visually overlap the player chip. Corners are pulled in tighter so they
  * clear both the top status strip and the bottom hand.
  */
+// On phones the hand spans 2 rows of xl cards + name/action bars, so the
+// bottom UI stack is ~24rem tall. Bottom seat tiles sit just above that so
+// the hand never covers them.
 const MOBILE_POSITIONS = [
-  { bottom: '13.5rem', left: '2%' },
+  { bottom: '24.5rem', left: '2%' },
   { top: '11%', left: '2%' },
   { top: '2.5rem', left: '50%', transform: 'translateX(-50%)' },
   { top: '11%', right: '2%' },
-  { bottom: '13.5rem', right: '2%' },
+  { bottom: '24.5rem', right: '2%' },
 ] as const;
 
 function GameTable({
@@ -133,9 +136,10 @@ function GameTable({
         )}
       </div>
 
-      {/* Table surface — `bottom-48` on mobile reserves space for the
-          player-name + hand + action-bar stack underneath. */}
-      <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-48 sm:bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
+      {/* Table surface — on phones the hand can span 2 rows (see PlayerHand's
+          row-splitting logic), so the oval shrinks to ~23rem from the bottom
+          to reserve room for name label + 2-row hand + action bar. */}
+      <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-[23rem] sm:bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
 
       {/* Center play area — anchored to the middle of the TABLE (which now
           stops at bottom-48 on mobile), not the viewport, so it doesn't push

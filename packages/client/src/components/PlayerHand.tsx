@@ -53,6 +53,29 @@ function groupByRank(sorted: CardType[]): CardType[][] {
   return groups;
 }
 
+/**
+ * Split groups into N rows as evenly as possible, keeping each rank-group
+ * intact. Used on narrow phones so 13 cards can be shown at a readable size
+ * across two lines instead of one tight stack.
+ */
+function splitGroupsIntoRows(groups: CardType[][], numRows: number): CardType[][][] {
+  if (numRows <= 1) return [groups];
+  const total = groups.reduce((s, g) => s + g.length, 0);
+  const target = Math.ceil(total / numRows);
+  const rows: CardType[][][] = Array.from({ length: numRows }, () => []);
+  let rowIdx = 0;
+  let running = 0;
+  for (const group of groups) {
+    rows[rowIdx].push(group);
+    running += group.length;
+    if (running >= target && rowIdx < numRows - 1) {
+      rowIdx++;
+      running = 0;
+    }
+  }
+  return rows.filter((r) => r.length > 0);
+}
+
 /** Card width (in px) for each size variant, so we can reason about fit. */
 const CARD_WIDTH: Record<'sm' | 'md' | 'lg' | 'xl', number> = {
   sm: 40,  // w-10
@@ -77,47 +100,50 @@ interface HandLayout {
  * so the last card is never clipped.
  */
 function getHandLayout(cardCount: number, numGroups: number, viewportWidth: number): HandLayout {
-  const isMobile = viewportWidth < 640;
+  // Phones and tablets both use the adaptive algorithm so every card fits.
+  // Only true desktops (≥1024 CSS px) fall through to the roomy fixed sizes.
+  const isCompact = viewportWidth < 1024;
 
-  if (isMobile) {
-    // Leave ~20px of side padding total so nothing clips at the viewport edge.
-    const available = Math.max(280, viewportWidth - 20);
+  if (isCompact) {
+    // Leave ~32px total horizontal safety margin. This covers the hand
+    // wrapper's own px-2 padding plus any parent container padding (e.g. the
+    // doubling phase adds p-2 on its outer shell). Empirically the prior
+    // -20 assumption clipped the rightmost cards in the doubling phase.
+    const available = Math.max(280, viewportWidth - 32);
 
-    // Pick the largest card size that still leaves each card with enough
-    // exposed width to tap reliably. md (56px) fits up to 13 cards on a
-    // 375px phone, so we only fall back to sm on unusually wide hands.
-    const size: 'sm' | 'md' | 'lg' | 'xl' =
-      cardCount <= 5 ? 'xl' :
-      cardCount <= 7 ? 'lg' :
-      cardCount <= 13 ? 'md' :
-      'sm';
+    // Pick the largest card size that still leaves room for every card to
+    // show at least ~35% of its width (so each card remains tappable). Fall
+    // back through xl → lg → md → sm as the hand grows.
+    const widths: Array<'xl' | 'lg' | 'md' | 'sm'> = ['xl', 'lg', 'md', 'sm'];
+    let size: 'sm' | 'md' | 'lg' | 'xl' = 'sm';
+    for (const candidate of widths) {
+      const w = CARD_WIDTH[candidate];
+      const minExposed = Math.max(18, Math.floor(w * 0.35));
+      const required = w + Math.max(0, cardCount - 1) * minExposed;
+      if (required <= available) { size = candidate; break; }
+    }
 
     const w = CARD_WIDTH[size];
 
     if (cardCount <= 1) {
-      // Single card — no overlap needed. Keep group gap at 0 so step logic
-      // doesn't accidentally shift the card offscreen.
+      // Single card — no overlap needed.
       return { size, withinOverlap: 0, groupGap: 0 };
     }
 
     // Uniform step between every consecutive card (treat within-group and
-    // between-group transitions the same). This lets the formula below
-    // reason about the whole hand in one calculation.
-    //   total = w + (cardCount - 1) * step
-    // We want total ≤ available, so:
-    //   step ≤ (available - w) / (cardCount - 1)
-    // Also: don't SPREAD cards (step ≤ w) and always show enough card to tap
-    // (step ≥ minExposed scaled to card width).
+    // between-group transitions the same). Keep step bounded so cards don't
+    // spread apart (step ≤ w) and always show enough card to tap
+    // (step ≥ minExposed).
     const minExposed = Math.max(18, Math.floor(w * 0.35));
     let step = Math.floor((available - w) / (cardCount - 1));
     if (step > w) step = w;
     if (step < minExposed) step = minExposed;
 
-    const overlap = step - w; // negative on mobile — cards overlap
+    const overlap = step - w;
     return { size, withinOverlap: overlap, groupGap: overlap };
   }
 
-  // Desktop: roomy sizing that preserves the original feel.
+  // Desktop (≥1024): roomy sizing that preserves the original feel.
   if (cardCount <= 6) {
     return { size: 'xl', withinOverlap: -10, groupGap: 14 };
   }
@@ -175,6 +201,16 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   const groups = groupByRank(displayCards);
   const selectedIds = new Set(selectedCards.map((c) => c.id));
   const viewportWidth = useViewportWidth();
+
+  // On narrow phones a 13-card hand packs so tight that ranks blur together.
+  // Split into 2 rows once the hand is large enough that single-row cards would
+  // be heavily occluded. Each row then lays out independently with its own
+  // size/overlap, so the cards grow (e.g. md → xl) and rank labels stay legible.
+  const splitRows = viewportWidth < 640 && cards.length > 9 ? 2 : 1;
+  const rowsOfGroups = splitGroupsIntoRows(groups, splitRows);
+
+  // Single-row layout (fallback and desktop/tablet path) still needs one
+  // shared size/overlap calculation. For multi-row we compute per-row below.
   const { size, withinOverlap, groupGap } = getHandLayout(
     cards.length,
     groups.length,
@@ -259,58 +295,71 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   let globalIndex = 0;
 
   return (
-    <div className="flex justify-center items-end pb-3 px-2 sm:px-4 w-full">
-      <div className="flex items-end max-w-full">
-        {groups.map((group, groupIdx) => (
-          <div
-            key={group[0].rank + '-' + groupIdx}
-            className="flex items-end"
-            style={{ marginLeft: groupIdx === 0 ? 0 : `${groupGap}px` }}
-          >
-            {group.map((card, cardIdx) => {
-              const idx = globalIndex++;
-              return (
-                <div
-                  key={card.id}
-                  className="transition-all duration-150 hover:-translate-y-2 hover:z-50 cursor-grab active:cursor-grabbing"
-                  style={{
-                    marginLeft: cardIdx === 0 ? 0 : `${withinOverlap}px`,
-                    zIndex: idx,
-                  }}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, card.id)}
-                  onDragOver={(e) => handleDragOver(e, card.id)}
-                  onDrop={handleDrop}
-                  onDragEnd={handleDragEnd}
-                >
-                  <Card
-                    card={card}
-                    selected={selectedIds.has(card.id)}
-                    onClick={() => handleCardClick(card)}
-                    size={size}
-                  />
-                </div>
-              );
-            })}
+    <div className="flex flex-col items-center pb-3 px-2 sm:px-4 w-full gap-1">
+      {rowsOfGroups.map((rowGroups, rowIdx) => {
+        // Per-row layout so each row is sized independently. On multi-row
+        // phones this lets a 7+6 split use xl cards on both rows rather
+        // than the single-row md squeeze.
+        const rowCardCount = rowGroups.reduce((s, g) => s + g.length, 0);
+        const rowLayout =
+          rowsOfGroups.length > 1
+            ? getHandLayout(rowCardCount, rowGroups.length, viewportWidth)
+            : { size, withinOverlap, groupGap };
 
-            {/* Rank count badge for multiples — hidden on mobile (would eat
-                the width budget and the sort-grouping already makes it
-                obvious which cards are paired/tripled). */}
-            {group.length >= 2 && (
+        return (
+          <div key={rowIdx} className="flex items-end max-w-full">
+            {rowGroups.map((group, groupIdx) => (
               <div
-                className={`hidden sm:flex relative -ml-3 mb-1 z-50 items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
-                  group.length >= 3
-                    ? 'bg-amber-500 text-black'
-                    : 'bg-green-600/80 text-white'
-                }`}
-                title={group.length >= 3 ? `${group.length}× bomb!` : `${group.length}× pair`}
+                key={group[0].rank + '-' + rowIdx + '-' + groupIdx}
+                className="flex items-end"
+                style={{ marginLeft: groupIdx === 0 ? 0 : `${rowLayout.groupGap}px` }}
               >
-                {group.length}
+                {group.map((card, cardIdx) => {
+                  const idx = globalIndex++;
+                  return (
+                    <div
+                      key={card.id}
+                      className="transition-all duration-150 hover:-translate-y-2 hover:z-50 cursor-grab active:cursor-grabbing"
+                      style={{
+                        marginLeft: cardIdx === 0 ? 0 : `${rowLayout.withinOverlap}px`,
+                        zIndex: idx,
+                      }}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, card.id)}
+                      onDragOver={(e) => handleDragOver(e, card.id)}
+                      onDrop={handleDrop}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <Card
+                        card={card}
+                        selected={selectedIds.has(card.id)}
+                        onClick={() => handleCardClick(card)}
+                        size={rowLayout.size}
+                      />
+                    </div>
+                  );
+                })}
+
+                {/* Rank count badge for multiples — hidden on mobile (would eat
+                    the width budget and the sort-grouping already makes it
+                    obvious which cards are paired/tripled). */}
+                {group.length >= 2 && (
+                  <div
+                    className={`hidden sm:flex relative -ml-3 mb-1 z-50 items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shadow-sm ${
+                      group.length >= 3
+                        ? 'bg-amber-500 text-black'
+                        : 'bg-green-600/80 text-white'
+                    }`}
+                    title={group.length >= 3 ? `${group.length}× bomb!` : `${group.length}× pair`}
+                  >
+                    {group.length}
+                  </div>
+                )}
               </div>
-            )}
+            ))}
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
