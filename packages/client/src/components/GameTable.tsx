@@ -180,11 +180,20 @@ function GameTable({
           this via `bottom-32 sm:bottom-36` above. */}
       <div className="absolute bottom-0 left-0 right-0 z-20 flex flex-col">
         {/* Player name label */}
-        <div className="text-center pb-1 sm:pb-2 pt-1 bg-gradient-to-t from-green-900/60 to-transparent">
+        <div className="text-center pb-1 sm:pb-2 pt-1 bg-gradient-to-t from-green-900/60 to-transparent flex items-center justify-center gap-1.5">
           <span className="text-white text-xs sm:text-sm font-semibold">
             {myPlayer?.name ?? 'You'}
           </span>
-          <span className="text-green-400 text-xs ml-1">(You)</span>
+          <span className="text-green-400 text-xs">(You)</span>
+          <span
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+              gameView.myTeam === 'red10'
+                ? 'bg-red-600 text-white'
+                : 'bg-gray-800 text-white'
+            }`}
+          >
+            {gameView.myTeam === 'red10' ? 'RED' : 'BLK'}
+          </span>
         </div>
         <PlayerHand
           cards={gameView.myHand}

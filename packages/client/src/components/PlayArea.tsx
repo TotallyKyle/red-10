@@ -31,6 +31,10 @@ function getPlayerName(players: ClientPlayerView[], playerId: string): string {
   return players.find((p) => p.id === playerId)?.name ?? 'Unknown';
 }
 
+function getPlayerTeam(players: ClientPlayerView[], playerId: string) {
+  return players.find((p) => p.id === playerId)?.team ?? null;
+}
+
 function isBombPlay(play: Play): boolean {
   return play.format === 'bomb';
 }
@@ -132,8 +136,21 @@ function PlayArea({ round, players }: PlayAreaProps) {
 
       {/* Who played */}
       {lastPlay && (
-        <span className="text-green-200 text-[10px] sm:text-xs">
+        <span className="text-green-200 text-[10px] sm:text-xs inline-flex items-center gap-1">
           {getPlayerName(players, lastPlay.playerId)}
+          {(() => {
+            const team = getPlayerTeam(players, lastPlay.playerId);
+            if (!team) return null;
+            return (
+              <span
+                className={`text-[9px] sm:text-[10px] font-bold px-1 sm:px-1.5 py-0.5 rounded-full ${
+                  team === 'red10' ? 'bg-red-600 text-white' : 'bg-gray-800 text-white'
+                }`}
+              >
+                {team === 'red10' ? 'RED' : 'BLK'}
+              </span>
+            );
+          })()}
           {isBombPlay(lastPlay) && (
             <span className={`ml-1 font-bold ${isRedTenBomb(lastPlay) ? 'text-red-400' : 'text-orange-400'}`}>
               BOMB!
