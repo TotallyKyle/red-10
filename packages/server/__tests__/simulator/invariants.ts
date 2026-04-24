@@ -162,18 +162,18 @@ function checkScoringConservation(
   const result = engine.getGameResult();
   if (!result) return;
 
-  // Scoring rule: each WINNER receives (stakeMultiplier × trappedCount).
-  // The losing team collectively funds this.
-  // Total pool = numWinners × stakeMultiplier × trappedCount, split among losers.
+  // Scoring rule: each LOSER pays (stakeMultiplier × trappedCount) into the
+  // pool. Winners split the pool equally. This makes upsets pay big and
+  // big-team-trapping-small-team pay less per head.
   if (result.scoringTeamWon && result.trapped.length > 0) {
     const scoringTeam = result.scoringTeam;
     const opposingTeam = scoringTeam === 'red10' ? 'black10' : 'red10';
     const numLosers = state.players.filter(p => p.team === opposingTeam).length;
     const numWinners = state.players.filter(p => p.team === scoringTeam).length;
 
-    const expectedWinnerReceive = state.stakeMultiplier * result.trapped.length;
-    const totalPool = expectedWinnerReceive * numWinners;
-    const expectedLoserPay = totalPool / numLosers;
+    const expectedLoserPay = state.stakeMultiplier * result.trapped.length;
+    const totalPool = expectedLoserPay * numLosers;
+    const expectedWinnerReceive = totalPool / numWinners;
 
     for (const p of state.players) {
       const payout = result.payouts[p.id];
@@ -181,14 +181,14 @@ function checkScoringConservation(
         if (Math.abs(payout - expectedWinnerReceive) > 0.001) {
           addViolation(
             'Scoring Conservation',
-            `Winner ${p.id} payout ${payout} !== expected ${expectedWinnerReceive} (stake=${state.stakeMultiplier} × ${result.trapped.length} trapped)`,
+            `Winner ${p.id} payout ${payout} !== expected ${expectedWinnerReceive} (pool=${totalPool} / ${numWinners} winners)`,
           );
         }
       } else if (p.team === opposingTeam) {
         if (Math.abs(payout - (-expectedLoserPay)) > 0.001) {
           addViolation(
             'Scoring Conservation',
-            `Loser ${p.id} payout ${payout} !== expected ${-expectedLoserPay} (pool=${totalPool} / ${numLosers} losers)`,
+            `Loser ${p.id} payout ${payout} !== expected ${-expectedLoserPay} (stake=${state.stakeMultiplier} × ${result.trapped.length} trapped)`,
           );
         }
       }

@@ -57,14 +57,18 @@ export function calculateScore(state: GameState): GameResult {
     const trappedCount = trapped.length;
     payoutPerTrapped = state.stakeMultiplier * 1;
 
-    // Scoring rule: each WINNER receives (stakeMultiplier × trappedCount).
-    // The losing team collectively funds this — total pool is split among losers.
-    // Each winner receives: stakeMultiplier × trappedCount
-    // Total pool: numWinners × stakeMultiplier × trappedCount
-    // Each loser pays: totalPool / numLosers
-    const amountPerWinner = payoutPerTrapped * trappedCount;
-    const totalPool = amountPerWinner * scoringMembers.length;
-    const amountPerLoser = totalPool / opposingMembers.length;
+    // Scoring rule: each LOSER pays (stakeMultiplier × trappedCount) into the
+    // trap pool. The winners split the pool equally. This makes upsets pay
+    // out big — a 1-vs-5 win where all five are trapped gives the lone red 10
+    // 5 × 5 = $25, not $5 — and a lopsided big-team win pays each winner less
+    // per head, matching how the table calls the score.
+    //
+    // Equivalently: every opposing-team seat owes the trap pool, regardless
+    // of whether they personally got trapped or escaped, and that pool funds
+    // the winning side.
+    const amountPerLoser = payoutPerTrapped * trappedCount;
+    const totalPool = amountPerLoser * opposingMembers.length;
+    const amountPerWinner = totalPool / scoringMembers.length;
 
     for (const loser of opposingMembers) {
       payouts[loser.id] = -amountPerLoser;
