@@ -16,6 +16,7 @@ import {
   getRoomForSocket,
   addBotToRoom,
   validatePlayerName,
+  setOnPlayerRemoved,
 } from './lobby.js';
 import type { Room } from './lobby.js';
 import { GameEngine } from './game/GameEngine.js';
@@ -503,6 +504,13 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   },
 });
 
+// When a disconnected player's reconnect window expires, broadcast so the
+// remaining clients can drop the stale row instead of leaving it greyed out
+// forever (which previously locked the lobby into a 7-row "6/6" state).
+setOnPlayerRemoved((roomId, socketId) => {
+  io.to(roomId).emit('room:player_removed', { playerId: socketId });
+});
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
@@ -717,7 +725,12 @@ io.on('connection', (socket) => {
     }
 
     const { room } = result;
-    const players = getPlayerList(room);
+    // Only seat connected players in the engine. canStartGame already gates on
+    // exactly PLAYER_COUNT connected & ready, but a still-disconnected entry
+    // (within the reconnect window) would otherwise be passed in too — and
+    // Deck.deal returns exactly PLAYER_COUNT hands, so any extra player makes
+    // GameEngine.startGame throw on `hands[i]` out-of-bounds.
+    const players = getPlayerList(room).filter((p) => p.isConnected);
 
     // Create the game engine
     const engine = new GameEngine(
