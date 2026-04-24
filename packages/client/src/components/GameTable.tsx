@@ -1,5 +1,5 @@
 import type { ClientGameView, Card as CardType } from '@red10/shared';
-import type { GameLogEntry, RoundEndDisplay } from '../hooks/useSocket.js';
+import type { GameLogEntry } from '../hooks/useSocket.js';
 import PlayerHand from './PlayerHand.js';
 import OtherPlayer from './OtherPlayer.js';
 import PlayArea from './PlayArea.js';
@@ -23,7 +23,6 @@ interface GameTableProps {
   turnStartTime: number | null;
   onRequestLog?: () => void;
   gameLogText?: string | null;
-  roundEndDisplay: RoundEndDisplay | null;
 }
 
 /**
@@ -78,7 +77,6 @@ const MOBILE_POSITIONS = [
 function GameTable({
   gameView, mySocketId, selectedCards, onToggleCard, onPlay, onPass,
   onDefuse, onCha, onGoCha, onDeclineCha, gameLog, errorMessage, turnStartTime, onRequestLog, gameLogText,
-  roundEndDisplay,
 }: GameTableProps) {
   const myPlayer = gameView.players.find((p) => p.id === mySocketId);
   const mySeatIndex = myPlayer?.seatIndex ?? 0;
@@ -143,7 +141,7 @@ function GameTable({
           stops at bottom-48 on mobile), not the viewport, so it doesn't push
           into the hand area. */}
       <div className="absolute top-[calc(50%_-_2rem)] sm:top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
-        <PlayArea round={gameView.round} players={gameView.players} roundEndDisplay={roundEndDisplay} />
+        <PlayArea round={gameView.round} players={gameView.players} lastRoundWin={gameView.lastRoundWin} />
       </div>
 
       {/* Other players */}
