@@ -1423,7 +1423,24 @@ export class GameEngine {
       return { allReady: false, count: 0 };
     }
 
+    // Only accept ready-ups from players that are actually in this game.
+    // Without this guard, a stale or spoofed socket id could be added to the
+    // set and artificially inflate the ready count, triggering an early
+    // resetForNewGame() that would leave some real player's hands un-dealt
+    // relative to the new state — causing their client to "freeze" on the
+    // scoreboard when the subsequent broadcast can't produce a valid view.
+    if (!this.state.players.some((p) => p.id === playerId)) {
+      return { allReady: false, count: this.playAgainPlayerIds.size };
+    }
+
     this.playAgainPlayerIds.add(playerId);
+
+    // Count only players that are still in state.players. The set can carry
+    // stale ids if a socket id was never reconciled via updatePlayerId.
+    const validIds = new Set(this.state.players.map((p) => p.id));
+    for (const id of this.playAgainPlayerIds) {
+      if (!validIds.has(id)) this.playAgainPlayerIds.delete(id);
+    }
     const count = this.playAgainPlayerIds.size;
     const totalPlayers = this.state.players.length;
 

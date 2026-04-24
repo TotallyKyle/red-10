@@ -14,6 +14,16 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogTe
   const totalPlayers = gameView.players.length;
   const playAgainCount = gameView.playAgainCount ?? 0;
   const [logRequested, setLogRequested] = useState(false);
+  // Track locally whether this player has clicked Play Again so we can show
+  // clear feedback ("Waiting for others..."). Without this, after clicking,
+  // the button stays "Play Again" and the user has no idea if their click
+  // landed — and may assume the game is stuck.
+  const [iAmReady, setIAmReady] = useState(false);
+
+  const handlePlayAgain = useCallback(() => {
+    setIAmReady(true);
+    onPlayAgain();
+  }, [onPlayAgain]);
 
   const handleDownloadLog = useCallback(() => {
     if (gameLogText) {
@@ -162,10 +172,15 @@ function ScoreBoard({ gameView, mySocketId, onPlayAgain, onRequestLog, gameLogTe
         <div className="text-center space-y-2 sm:space-y-3">
           <div className="flex justify-center gap-2 sm:gap-4">
             <button
-              onClick={onPlayAgain}
-              className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 sm:py-3 px-4 sm:px-8 rounded-lg text-base sm:text-lg transition-colors"
+              onClick={handlePlayAgain}
+              disabled={iAmReady}
+              className={`flex-1 sm:flex-none font-bold py-2.5 sm:py-3 px-4 sm:px-8 rounded-lg text-base sm:text-lg transition-colors ${
+                iAmReady
+                  ? 'bg-green-700/40 border border-green-600/40 text-green-300 cursor-default'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white'
+              }`}
             >
-              Play Again
+              {iAmReady ? '✓ Ready — Waiting…' : 'Play Again'}
             </button>
             <button
               onClick={handleDownloadLog}

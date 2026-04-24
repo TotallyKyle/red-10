@@ -41,12 +41,23 @@ const TURN_TIMEOUT_MS = 30_000;
 const BOT_ACTION_DELAY = 2000;
 const BOT_CHA_DELAY = 1500;
 
-/** Broadcast game state to all human players in the room (skips bots). */
+/** Broadcast game state to all human players in the room (skips bots).
+ *
+ * Wrapped in try/catch so a single player whose socket id has drifted out of
+ * sync with the engine's state (e.g., a botched reconnect) can't take down
+ * the whole broadcast and leave everyone else frozen on a stale view. */
 function broadcastState(roomId: string, room: Room, engine: GameEngine) {
   for (const p of room.players.values()) {
-    if (!botManager.isBot(p.socketId)) {
+    if (botManager.isBot(p.socketId)) continue;
+    try {
       const view = engine.getClientView(p.socketId);
       io.to(p.socketId).emit('game:state', view);
+    } catch (err) {
+      console.error(
+        `[broadcastState] room=${roomId} player=${p.socketId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 }

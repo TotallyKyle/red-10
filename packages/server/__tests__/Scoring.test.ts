@@ -529,4 +529,39 @@ describe('Scoring — integration via GameEngine', () => {
     // Game result should be cleared
     expect(engine.getGameResult()).toBeNull();
   });
+
+  it('playAgain ignores unknown ids (e.g. a stale socket id from a reconnected player)', () => {
+    // Regression test: previously, any id could be added to playAgainPlayerIds
+    // and inflate the count beyond real players. This caused the engine to
+    // reset prematurely and leave one real player's view un-updatable,
+    // freezing their screen on the scoreboard.
+    //
+    // Repro a game-over state with a minimal setup.
+    const engine = createTestEngine();
+    // Force phase to game_over by finishing a game fast. We just stub via
+    // internal state the same way existing tests do.
+    const st = engine.getState() as any;
+    st.phase = 'game_over';
+
+    const before = engine.playAgain('not-a-real-player');
+    expect(before.count).toBe(0);
+    expect(before.allReady).toBe(false);
+
+    // A real player should still succeed.
+    const real = engine.playAgain('p0');
+    expect(real.count).toBe(1);
+    expect(real.allReady).toBe(false);
+  });
 });
+
+// Small helper for the guard test above — a minimal engine with 6 players.
+function createTestEngine() {
+  return new GameEngine('test-play-again', [
+    { id: 'p0', name: 'A', seatIndex: 0 },
+    { id: 'p1', name: 'B', seatIndex: 1 },
+    { id: 'p2', name: 'C', seatIndex: 2 },
+    { id: 'p3', name: 'D', seatIndex: 3 },
+    { id: 'p4', name: 'E', seatIndex: 4 },
+    { id: 'p5', name: 'F', seatIndex: 5 },
+  ]);
+}
