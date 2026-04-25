@@ -539,6 +539,44 @@ describe('BotManager — teammate speculative cha', () => {
   });
 });
 
+describe('BotManager — P4(d) pair opening vs 2-card opponent', () => {
+  it('leads the highest pair when opponent has 2 cards and no straights exist', () => {
+    // Bot Charlie scenario from 2026-04-25T02-40-38-XQVL: hand has K-K and Q-Q pairs
+    // but no straights/paired_straights. With opponent at 2 cards, P4(d) previously
+    // fell through to highest single (K). After fix it should play K-K pair.
+    const hands: Card[][] = [
+      // p0 has K-K, Q-Q, and three singles (no straights — ranks non-consecutive)
+      [
+        card('K', 'spades', false, 'p0-ks'),
+        card('K', 'hearts', true, 'p0-kh'),
+        card('Q', 'spades', false, 'p0-qs'),
+        card('Q', 'hearts', true, 'p0-qh'),
+        card('9', 'spades', false, 'p0-9s'),
+        card('7', 'clubs', false, 'p0-7c'),
+        card('3', 'hearts', true, 'p0-3h'),
+      ],
+      // p1 (black10 opponent): exactly 2 cards
+      [card('5', 'clubs', false, 'p1-5c'), card('6', 'clubs', false, 'p1-6c')],
+      // p2-p5: 4+ cards each, no threat
+      [card('4', 'clubs', false), card('5', 'hearts', true), card('6', 'spades', false), card('7', 'hearts', true)],
+      [card('8', 'clubs', false), card('9', 'hearts', true), card('10', 'spades', false), card('J', 'clubs', false)],
+      [card('4', 'diamonds', true), card('5', 'diamonds', true), card('6', 'diamonds', true), card('8', 'diamonds', true)],
+      [card('J', 'hearts', true), card('A', 'clubs', false), card('2', 'spades', false), card('3', 'diamonds', true)],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p0');
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action !== 'play') return;
+    // Must be a pair (2 cards), not a single (1 card)
+    expect(decision.cards).toHaveLength(2);
+    // Must be the K-K pair (highest), not Q-Q
+    expect(decision.cards.every(c => c.rank === 'K')).toBe(true);
+  });
+});
+
 describe('BotManager — exit-in-one-play opening', () => {
   it('plays entire hand as a bomb when the whole hand forms a valid combo', () => {
     // p0 holds exactly 4 Kings (a bomb). Previously chooseBestOpening would

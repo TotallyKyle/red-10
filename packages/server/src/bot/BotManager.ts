@@ -927,6 +927,13 @@ function smartPlayDecision(
       if (straights.length > 0) return { action: 'play', cards: straights[0] };
       const ps = findValidPairedStraights(player.hand, null);
       if (ps.length > 0) return { action: 'play', cards: ps[0] };
+      // Try pairs — clears 2 cards and harder for a 2-card opponent to beat than a single.
+      // Use the highest-rank pair to minimise the chance the opponent can beat it.
+      const blockPairs = findValidPairs(player.hand, null, true);
+      if (blockPairs.length > 0) {
+        const byHighest = [...blockPairs].sort((a, b) => rankValue(b[0].rank) - rankValue(a[0].rank));
+        return { action: 'play', cards: byHighest[0] };
+      }
       // No multi-card option: a high single is safer than a low single because
       // a 2-card opponent with a high-ish card could still beat a low lead.
       const bombRanks = getBombRanks(player.hand);
