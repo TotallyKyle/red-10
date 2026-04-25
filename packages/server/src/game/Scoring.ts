@@ -57,18 +57,26 @@ export function calculateScore(state: GameState): GameResult {
     const trappedCount = trapped.length;
     payoutPerTrapped = state.stakeMultiplier * 1;
 
-    // Scoring rule: each LOSER pays (stakeMultiplier × trappedCount) into the
-    // trap pool. The winners split the pool equally. This makes upsets pay
-    // out big — a 1-vs-5 win where all five are trapped gives the lone red 10
-    // 5 × 5 = $25, not $5 — and a lopsided big-team win pays each winner less
-    // per head, matching how the table calls the score.
+    // Scoring rule (symmetric pool): the all-trapped pool is exactly
+    // bigTeamSize² × stakeMultiplier, where bigTeamSize is whichever of the
+    // two teams is larger. Partial traps scale linearly with trappedCount /
+    // numLosers. This makes the pool — and therefore the total dollars
+    // changing hands — identical when the team configuration is mirrored:
     //
-    // Equivalently: every opposing-team seat owes the trap pool, regardless
-    // of whether they personally got trapped or escaped, and that pool funds
-    // the winning side.
-    const amountPerLoser = payoutPerTrapped * trappedCount;
-    const totalPool = amountPerLoser * opposingMembers.length;
-    const amountPerWinner = totalPool / scoringMembers.length;
+    //   2v4 trapping all 4 → pool = 16 → -$4 / +$8
+    //   4v2 trapping all 2 → pool = 16 → -$8 / +$4
+    //   1v5 trapping all 5 → pool = 25 → -$5 / +$25 (max upset)
+    //   5v1 trapping all 1 → pool = 25 → -$25 / +$5
+    //
+    // For balanced 3v3 the formula collapses to (stakeMultiplier × trapped)
+    // per side, the natural "$1 per trap per seat" rule.
+    const numWinners = scoringMembers.length;
+    const numLosers = opposingMembers.length;
+    const bigTeamSize = Math.max(numWinners, numLosers);
+    const totalPool =
+      (bigTeamSize * bigTeamSize * payoutPerTrapped * trappedCount) / numLosers;
+    const amountPerLoser = totalPool / numLosers;
+    const amountPerWinner = totalPool / numWinners;
 
     for (const loser of opposingMembers) {
       payouts[loser.id] = -amountPerLoser;

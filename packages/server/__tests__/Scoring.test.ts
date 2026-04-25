@@ -228,6 +228,7 @@ describe('Scoring — calculateScore', () => {
   it('4v2 team composition: big team wins, small team loses (all 2 trapped)', () => {
     // Red 10 team: p0, p1 (2 members, all trapped)
     // Black 10 team: p2, p3, p4, p5 (4 members, scoring)
+    // Mirror of the 2v4 case above: same pool ($16), payouts swap sides.
     const state = buildGameState({
       teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
       finishOrder: ['p2', 'p3', 'p4', 'p5', 'p0', 'p1'],
@@ -241,20 +242,19 @@ describe('Scoring — calculateScore', () => {
     expect(result.scoringTeamWon).toBe(true);
     expect(result.trapped.length).toBe(2);
 
-    // Each loser pays $1 × 2 trapped = $2.
-    expect(result.payouts['p0']).toBe(-2);
-    expect(result.payouts['p1']).toBe(-2);
+    // Pool: bigTeamSize² × $1 = 4² = $16.
+    // Each of 2 losers pays $16/2 = $8.
+    expect(result.payouts['p0']).toBe(-8);
+    expect(result.payouts['p1']).toBe(-8);
 
-    // Total pool: 2 losers × $2 = $4, split among 4 winners = $1 each.
-    // Big team beating small team is unimpressive, so the per-head reward is
-    // smaller than a balanced 3v3 win.
-    expect(result.payouts['p2']).toBe(1);
-    expect(result.payouts['p3']).toBe(1);
-    expect(result.payouts['p4']).toBe(1);
-    expect(result.payouts['p5']).toBe(1);
+    // Each of 4 winners receives $16/4 = $4.
+    expect(result.payouts['p2']).toBe(4);
+    expect(result.payouts['p3']).toBe(4);
+    expect(result.payouts['p4']).toBe(4);
+    expect(result.payouts['p5']).toBe(4);
   });
 
-  it('4v2 team composition: big team wins, 1 trapped (fractional per-winner share)', () => {
+  it('4v2 team composition: big team wins, 1 trapped', () => {
     // Black 10 team: p2, p3, p4, p5 (4 members, scoring)
     // Red 10 team: p0, p1 (2 members, p0 got out, p1 trapped)
     const state = buildGameState({
@@ -270,17 +270,17 @@ describe('Scoring — calculateScore', () => {
     expect(result.scoringTeamWon).toBe(true);
     expect(result.trapped.length).toBe(1);
 
-    // Each loser (trapped or not) pays $1 × 1 trapped = $1.
-    expect(result.payouts['p0']).toBe(-1);
-    expect(result.payouts['p1']).toBe(-1);
+    // Pool: bigTeamSize² × $1 × (trapped/losers) = 16 × 1/2 = $8.
+    // Each of 2 losers pays $8/2 = $4 (escapee p0 still pays — same rule
+    // as the all-trapped case, scaled by trap count).
+    expect(result.payouts['p0']).toBe(-4);
+    expect(result.payouts['p1']).toBe(-4);
 
-    // Total pool: 2 losers × $1 = $2, split among 4 winners = $0.50 each.
-    // Fractions are intentional: this rule guarantees integer charges to each
-    // loser at the cost of fractional rewards when the winning team is large.
-    expect(result.payouts['p2']).toBe(0.5);
-    expect(result.payouts['p3']).toBe(0.5);
-    expect(result.payouts['p4']).toBe(0.5);
-    expect(result.payouts['p5']).toBe(0.5);
+    // Each of 4 winners receives $8/4 = $2.
+    expect(result.payouts['p2']).toBe(2);
+    expect(result.payouts['p3']).toBe(2);
+    expect(result.payouts['p4']).toBe(2);
+    expect(result.payouts['p5']).toBe(2);
   });
 
   it('1v5 team composition: lone red 10 wins, all 5 black 10s trapped', () => {
@@ -311,9 +311,10 @@ describe('Scoring — calculateScore', () => {
     expect(result.payouts['p0']).toBe(25);
   });
 
-  it('5v1 team composition: big team wins, lone red 10 trapped (fractional per-winner)', () => {
+  it('5v1 team composition: big team wins, lone red 10 trapped', () => {
     // Black 10 team: p1, p2, p3, p4, p5 (5 members, scoring)
     // Red 10 team: p0 (1 member, trapped)
+    // Mirror of the 1v5 case: same pool ($25), payouts swap sides.
     const state = buildGameState({
       teams: ['red10', 'black10', 'black10', 'black10', 'black10', 'black10'],
       finishOrder: ['p1', 'p2', 'p3', 'p4', 'p5', 'p0'],
@@ -327,15 +328,67 @@ describe('Scoring — calculateScore', () => {
     expect(result.scoringTeamWon).toBe(true);
     expect(result.trapped.length).toBe(1);
 
-    // Sole loser pays $1 × 1 trapped = $1.
-    expect(result.payouts['p0']).toBe(-1);
+    // Pool: bigTeamSize² × $1 = 5² = $25. Sole loser pays the full pool.
+    expect(result.payouts['p0']).toBe(-25);
 
-    // Total pool: 1 loser × $1 = $1, split among 5 winners = $0.20 each.
-    expect(result.payouts['p1']).toBeCloseTo(0.2);
-    expect(result.payouts['p2']).toBeCloseTo(0.2);
-    expect(result.payouts['p3']).toBeCloseTo(0.2);
-    expect(result.payouts['p4']).toBeCloseTo(0.2);
-    expect(result.payouts['p5']).toBeCloseTo(0.2);
+    // Each of 5 winners receives $25/5 = $5.
+    expect(result.payouts['p1']).toBe(5);
+    expect(result.payouts['p2']).toBe(5);
+    expect(result.payouts['p3']).toBe(5);
+    expect(result.payouts['p4']).toBe(5);
+    expect(result.payouts['p5']).toBe(5);
+  });
+
+  it('mirrored team configurations have an identical total pool when fully trapped', () => {
+    // The whole point of the symmetric rule: total dollars changing hands in
+    // a fully-trapped game depends only on the bigger team size, not on
+    // which team won. 2v4 vs 4v2 must move the same amount of money.
+    const small2WinsAll4 = calculateScore(
+      buildGameState({
+        teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
+        finishOrder: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'],
+        outPlayers: ['p0', 'p1'],
+        stakeMultiplier: 1,
+        scoringTeam: 'red10',
+      }),
+    );
+    const big4WinsAll2 = calculateScore(
+      buildGameState({
+        teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
+        finishOrder: ['p2', 'p3', 'p4', 'p5', 'p0', 'p1'],
+        outPlayers: ['p2', 'p3', 'p4', 'p5'],
+        stakeMultiplier: 1,
+        scoringTeam: 'black10',
+      }),
+    );
+
+    const totalDollars = (r: typeof small2WinsAll4) =>
+      Object.values(r.payouts).reduce((sum, v) => sum + Math.max(0, v), 0);
+
+    expect(totalDollars(small2WinsAll4)).toBe(16);
+    expect(totalDollars(big4WinsAll2)).toBe(16);
+
+    // 1v5 vs 5v1 with all opponents trapped — same symmetry, $25 either way.
+    const lone1WinsAll5 = calculateScore(
+      buildGameState({
+        teams: ['red10', 'black10', 'black10', 'black10', 'black10', 'black10'],
+        finishOrder: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'],
+        outPlayers: ['p0'],
+        stakeMultiplier: 1,
+        scoringTeam: 'red10',
+      }),
+    );
+    const big5WinsLone1 = calculateScore(
+      buildGameState({
+        teams: ['red10', 'black10', 'black10', 'black10', 'black10', 'black10'],
+        finishOrder: ['p1', 'p2', 'p3', 'p4', 'p5', 'p0'],
+        outPlayers: ['p1', 'p2', 'p3', 'p4', 'p5'],
+        stakeMultiplier: 1,
+        scoringTeam: 'black10',
+      }),
+    );
+    expect(totalDollars(lone1WinsAll5)).toBe(25);
+    expect(totalDollars(big5WinsLone1)).toBe(25);
   });
 
   it('all trapped: none of opposing team finished', () => {
