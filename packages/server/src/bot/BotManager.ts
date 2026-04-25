@@ -273,24 +273,32 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
   // Big bonus for playing many cards — clears hand fast
   score += cards.length * 10;
 
-  // Bonus for playing orphan cards (dead weight we can only shed by leading)
-  const orphanCount = cards.filter(c => orphans.has(c.id)).length;
-  score += orphanCount * 8;
-
-  // Bonus for low rank (we want to save high cards for beating opponents)
   const avgRank = cards.reduce((sum, c) => sum + rankValue(c.rank), 0) / cards.length;
-  score += (12 - avgRank) * 2; // lower rank = higher score
+  const isEndgame = hand.length <= 4;
+
+  if (isEndgame) {
+    // In endgame, prefer high-rank plays: they win rounds and accelerate exit.
+    // "Save high cards for responding" doesn't apply when few cards remain.
+    score += avgRank;
+  } else {
+    // Bonus for playing orphan cards (dead weight we can only shed by leading)
+    const orphanCount = cards.filter(c => orphans.has(c.id)).length;
+    score += orphanCount * 8;
+
+    // Bonus for low rank (we want to save high cards for beating opponents)
+    score += (12 - avgRank) * 2; // lower rank = higher score
+
+    // Heavy penalty for leading with 2s or Aces — these are power cards
+    // for RESPONDING, not leading. A 2 is nearly unbeatable so save it.
+    const hasTwos = cards.some(c => c.rank === '2');
+    const hasAces = cards.some(c => c.rank === 'A');
+    if (hasTwos) score -= 20; // never lead with 2s in any format
+    if (hasAces && !hasTwos) score -= 10; // avoid leading with Aces (unless part of 4,4,A)
+  }
 
   // Penalty for using bomb cards (preserve bombs for interrupts)
   const bombCardCount = cards.filter(c => bombRanks.has(c.rank)).length;
   score -= bombCardCount * 5;
-
-  // Heavy penalty for leading with 2s or Aces — these are power cards
-  // for RESPONDING, not leading. A 2 is nearly unbeatable so save it.
-  const hasTwos = cards.some(c => c.rank === '2');
-  const hasAces = cards.some(c => c.rank === 'A');
-  if (hasTwos) score -= 20; // never lead with 2s in any format
-  if (hasAces && !hasTwos) score -= 10; // avoid leading with Aces (unless part of 4,4,A)
 
   // Bonus for straights and paired straights (harder to beat)
   const fmt = detectFormat(cards);
@@ -316,14 +324,19 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
  */
 function chooseBestOpening(hand: Card[]): Card[] | null {
   const candidates: Card[][] = [];
+  const bombRanks = getBombRanks(hand);
 
   // Collect all possible openings
-  candidates.push(...findValidStraights(hand, null));
-  candidates.push(...findValidPairedStraights(hand, null));
+  // Exclude straights that use bomb-rank cards (would destroy a bomb), same as pairs/singles.
+  candidates.push(...findValidStraights(hand, null).filter(
+    s => !s.some(c => bombRanks.has(c.rank)),
+  ));
+  candidates.push(...findValidPairedStraights(hand, null).filter(
+    s => !s.some(c => bombRanks.has(c.rank)),
+  ));
 
   // Pairs (preserving bombs)
   const groups = groupByRank(hand);
-  const bombRanks = getBombRanks(hand);
   for (const [rank, cards] of groups) {
     if (cards.length >= 2 && !(bombRanks.has(rank) && cards.length < 5)) {
       candidates.push([cards[0], cards[1]]);

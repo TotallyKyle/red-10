@@ -814,3 +814,82 @@ describe('BotManager — P3 bomb guard: no bombing over a winning teammate', () 
     expect(decision.action).toBe('pass');
   });
 });
+
+describe('BotManager — chooseBestOpening: endgame scoring (hand ≤ 4 cards)', () => {
+  it('prefers K+K pair over low single with 4-card hand', () => {
+    // Before fix: scoreOpening awarded low-rank bonus, making 4♦ score ~40 vs K+K ~24.
+    // After fix: endgame scoring (hand≤4) uses avgRank bonus, K+K scores ~30 vs 4♦ ~11.
+    const hands: Card[][] = [
+      [
+        card('K', 'spades', false, 'p0-ks'),
+        card('K', 'hearts2', true, 'p0-kh2'),
+        card('2', 'clubs', false, 'p0-2c'),
+        card('4', 'diamonds', true, 'p0-4d'),
+      ],
+      [card('3','clubs',false), card('5','clubs',false), card('6','clubs',false),
+       card('7','clubs',false), card('8','clubs',false), card('9','clubs',false), card('10','clubs',false)],
+      [card('3','hearts',true), card('5','hearts',true), card('6','hearts',true),
+       card('7','hearts',true), card('8','hearts',true), card('9','hearts',true), card('10','hearts',true)],
+      [card('3','spades',false), card('5','spades',false), card('6','spades',false),
+       card('7','spades',false), card('8','spades',false), card('9','spades',false), card('10','spades',false)],
+      [card('3','diamonds',true), card('5','diamonds',true), card('6','diamonds',true),
+       card('7','diamonds',true), card('8','diamonds',true), card('9','diamonds',true), card('10','diamonds',true)],
+      [card('4','clubs',false), card('5','clubs2',false), card('6','clubs2',false),
+       card('7','clubs2',false), card('8','clubs2',false), card('9','clubs2',false), card('J','clubs2',false)],
+    ];
+    const teams: ('red10' | 'black10')[] = ['black10','red10','black10','red10','black10','red10'];
+    const engine = setupEngine(hands, teams, 'p0');
+    const state = engine.getState();
+    state.round!.currentFormat = null;
+    state.round!.leaderId = 'p0';
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action === 'play') {
+      expect(decision.cards).toHaveLength(2);
+      expect(decision.cards.every(c => c.rank === 'K')).toBe(true);
+    }
+  });
+});
+
+describe('BotManager — chooseBestOpening: bomb-breaking straight filter', () => {
+  it('avoids opening a straight that would break a K×3 bomb', () => {
+    // J-Q-K♦ is the only 3-card straight but K♦ belongs to a K×3 bomb.
+    // After fix: that straight is excluded; bot opens a single instead.
+    const hands: Card[][] = [
+      [
+        card('K', 'diamonds', true,  'p0-kd'),
+        card('K', 'spades',   false, 'p0-ks'),
+        card('K', 'hearts2',  true,  'p0-kh2'),
+        card('J', 'hearts2',  true,  'p0-jh2'),
+        card('Q', 'hearts',   true,  'p0-qh'),
+        card('4', 'diamonds', true,  'p0-4d'),
+        card('2', 'clubs',    false, 'p0-2c'),
+      ],
+      [card('3','clubs',false), card('5','clubs',false), card('6','clubs',false),
+       card('7','clubs',false), card('8','clubs',false), card('9','clubs',false), card('10','clubs',false)],
+      [card('3','hearts',true), card('5','hearts',true), card('6','hearts',true),
+       card('7','hearts',true), card('8','hearts',true), card('9','hearts',true), card('10','hearts',true)],
+      [card('3','spades',false), card('5','spades',false), card('6','spades',false),
+       card('7','spades',false), card('8','spades',false), card('9','spades',false), card('10','spades',false)],
+      [card('3','diamonds',true), card('5','diamonds',true), card('6','diamonds',true),
+       card('7','diamonds',true), card('8','diamonds',true), card('9','diamonds',true), card('10','diamonds',true)],
+      [card('4','clubs',false), card('5','clubs2',false), card('6','clubs2',false),
+       card('7','clubs2',false), card('8','clubs2',false), card('9','clubs2',false), card('J','clubs2',false)],
+    ];
+    const teams: ('red10' | 'black10')[] = ['black10','red10','black10','red10','black10','red10'];
+    const engine = setupEngine(hands, teams, 'p0');
+    const state = engine.getState();
+    state.round!.currentFormat = null;
+    state.round!.leaderId = 'p0';
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action === 'play') {
+      // Must not open with a 3+ card straight containing any K (bomb-rank)
+      const hasK = decision.cards.some(c => c.rank === 'K');
+      const isMultiCardPlay = decision.cards.length >= 3;
+      expect(hasK && isMultiCardPlay).toBe(false);
+    }
+  });
+});
