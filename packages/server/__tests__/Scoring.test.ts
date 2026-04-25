@@ -254,9 +254,14 @@ describe('Scoring — calculateScore', () => {
     expect(result.payouts['p5']).toBe(4);
   });
 
-  it('4v2 team composition: big team wins, 1 trapped', () => {
+  it('4v2 team composition: big team wins, 1 trapped (special-case override)', () => {
     // Black 10 team: p2, p3, p4, p5 (4 members, scoring)
     // Red 10 team: p0, p1 (2 members, p0 got out, p1 trapped)
+    //
+    // The symmetric formula would give -$4 / +$2 here; the user's table
+    // calls this case at the old pairwise rate ($1 per trap per winner).
+    // This is a deliberate override carved out for big-team-wins-partial
+    // (the only such config in a 6-player game is 4v2 with 1 trapped).
     const state = buildGameState({
       teams: ['red10', 'red10', 'black10', 'black10', 'black10', 'black10'],
       finishOrder: ['p2', 'p0', 'p3', 'p4', 'p5', 'p1'],
@@ -270,17 +275,15 @@ describe('Scoring — calculateScore', () => {
     expect(result.scoringTeamWon).toBe(true);
     expect(result.trapped.length).toBe(1);
 
-    // Pool: bigTeamSize² × $1 × (trapped/losers) = 16 × 1/2 = $8.
-    // Each of 2 losers pays $8/2 = $4 (escapee p0 still pays — same rule
-    // as the all-trapped case, scaled by trap count).
-    expect(result.payouts['p0']).toBe(-4);
-    expect(result.payouts['p1']).toBe(-4);
+    // Each of 4 winners receives $1 × 1 trapped = $1 (pairwise rule).
+    expect(result.payouts['p2']).toBe(1);
+    expect(result.payouts['p3']).toBe(1);
+    expect(result.payouts['p4']).toBe(1);
+    expect(result.payouts['p5']).toBe(1);
 
-    // Each of 4 winners receives $8/4 = $2.
-    expect(result.payouts['p2']).toBe(2);
-    expect(result.payouts['p3']).toBe(2);
-    expect(result.payouts['p4']).toBe(2);
-    expect(result.payouts['p5']).toBe(2);
+    // Pool = 4 × $1 = $4, split among 2 losers = $2 each.
+    expect(result.payouts['p0']).toBe(-2);
+    expect(result.payouts['p1']).toBe(-2);
   });
 
   it('1v5 team composition: lone red 10 wins, all 5 black 10s trapped', () => {

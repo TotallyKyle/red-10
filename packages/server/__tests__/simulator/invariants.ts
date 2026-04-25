@@ -166,16 +166,23 @@ function checkScoringConservation(
   // (trappedCount / numLosers). Each loser pays pool/numLosers; each winner
   // gets pool/numWinners. Mirroring the team configuration leaves the pool
   // unchanged but swaps the per-side amounts.
+  //
+  // Special case (mirrors Scoring.ts): big team wins + partial trap (only
+  // 4v2 with 1 trapped in a 6-player game) falls back to the old pairwise
+  // rule — each winner gets stakeMultiplier × trappedCount.
   if (result.scoringTeamWon && result.trapped.length > 0) {
     const scoringTeam = result.scoringTeam;
     const opposingTeam = scoringTeam === 'red10' ? 'black10' : 'red10';
     const numLosers = state.players.filter(p => p.team === opposingTeam).length;
     const numWinners = state.players.filter(p => p.team === scoringTeam).length;
     const bigTeamSize = Math.max(numLosers, numWinners);
+    const isBigTeamPartialWin =
+      numWinners > numLosers && result.trapped.length < numLosers;
 
-    const totalPool =
-      (bigTeamSize * bigTeamSize * state.stakeMultiplier * result.trapped.length) /
-      numLosers;
+    const totalPool = isBigTeamPartialWin
+      ? state.stakeMultiplier * result.trapped.length * numWinners
+      : (bigTeamSize * bigTeamSize * state.stakeMultiplier * result.trapped.length) /
+        numLosers;
     const expectedLoserPay = totalPool / numLosers;
     const expectedWinnerReceive = totalPool / numWinners;
 
