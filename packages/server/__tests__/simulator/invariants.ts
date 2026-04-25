@@ -162,17 +162,21 @@ function checkScoringConservation(
   const result = engine.getGameResult();
   if (!result) return;
 
-  // Scoring rule: each LOSER pays (stakeMultiplier × trappedCount) into the
-  // pool. Winners split the pool equally. This makes upsets pay big and
-  // big-team-trapping-small-team pay less per head.
+  // Scoring rule (symmetric pool): pool = bigTeamSize² × stakeMultiplier ×
+  // (trappedCount / numLosers). Each loser pays pool/numLosers; each winner
+  // gets pool/numWinners. Mirroring the team configuration leaves the pool
+  // unchanged but swaps the per-side amounts.
   if (result.scoringTeamWon && result.trapped.length > 0) {
     const scoringTeam = result.scoringTeam;
     const opposingTeam = scoringTeam === 'red10' ? 'black10' : 'red10';
     const numLosers = state.players.filter(p => p.team === opposingTeam).length;
     const numWinners = state.players.filter(p => p.team === scoringTeam).length;
+    const bigTeamSize = Math.max(numLosers, numWinners);
 
-    const expectedLoserPay = state.stakeMultiplier * result.trapped.length;
-    const totalPool = expectedLoserPay * numLosers;
+    const totalPool =
+      (bigTeamSize * bigTeamSize * state.stakeMultiplier * result.trapped.length) /
+      numLosers;
+    const expectedLoserPay = totalPool / numLosers;
     const expectedWinnerReceive = totalPool / numWinners;
 
     for (const p of state.players) {
@@ -188,7 +192,7 @@ function checkScoringConservation(
         if (Math.abs(payout - (-expectedLoserPay)) > 0.001) {
           addViolation(
             'Scoring Conservation',
-            `Loser ${p.id} payout ${payout} !== expected ${-expectedLoserPay} (stake=${state.stakeMultiplier} × ${result.trapped.length} trapped)`,
+            `Loser ${p.id} payout ${payout} !== expected ${-expectedLoserPay} (pool=${totalPool} / ${numLosers} losers)`,
           );
         }
       }
