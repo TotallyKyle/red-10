@@ -303,6 +303,11 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
     score += 6;
   }
 
+  // Full-hand exit: playing the entire hand clears the round in one shot.
+  if (cards.length === hand.length && hand.length > 1) {
+    score += 100;
+  }
+
   return score;
 }
 
@@ -330,6 +335,13 @@ function chooseBestOpening(hand: Card[]): Card[] | null {
     if (!bombRanks.has(c.rank)) {
       candidates.push([c]);
     }
+  }
+
+  // Full-hand exit: if the entire hand is a valid format, add it as a candidate.
+  // scoreOpening gives it +100 so it wins unless there's a reason not to play it.
+  if (hand.length >= 2) {
+    const fmt = detectFormat(hand);
+    if (fmt) candidates.push([...hand]);
   }
 
   // Fallback: all singles including bomb cards
@@ -625,6 +637,12 @@ function decideChaGo(
   const isHighRank = rv >= 11; // A or 2
   const isMedRank = rv === 10 || rv === 9; // K or Q
 
+  // Compute triggerIsTeammate here so it's accessible after the if (lastPlayerId) block.
+  const triggerPlayer = lastPlayerId ? state.players.find(p => p.id === lastPlayerId) : null;
+  const triggerIsTeammate = !!(
+    triggerPlayer?.team && player.team && triggerPlayer.team === player.team
+  );
+
   // Turn order analysis: who would we skip by chaing?
   if (lastPlayerId) {
     const lastIdx2 = state.players.findIndex(p => p.id === lastPlayerId);
@@ -637,15 +655,6 @@ function decideChaGo(
       if (!p.isOut) skippedPlayers.push(p);
       checkIdx2 = (checkIdx2 + 1) % 6;
     }
-
-    // If the trigger play was by a known teammate, the go phase is risky:
-    // an opponent can counter and steal the trick. Require a stricter skip
-    // threshold for low-rank chas — only cha if bypassing someone truly about
-    // to go out (≤2 cards), not just any opponent in the skip window.
-    const triggerPlayer = state.players.find(p => p.id === lastPlayerId);
-    const triggerIsTeammate = !!(
-      triggerPlayer?.team && player.team && triggerPlayer.team === player.team
-    );
 
     // Skip an opponent about to go out — highest-value reason to cha.
     // For HIGH ranks (A, 2): require ≤2 cards.
@@ -688,25 +697,30 @@ function decideChaGo(
   // No skip value. For high/med ranks, never cha speculatively.
   if (isHighRank || isMedRank) return 'decline';
 
-  // Hand-shaping: if we hold a 5+ card straight that the cha pair won't break,
-  // cha to thin the hand toward that exit straight even without an opponent skip.
-  {
-    const chaCardIds = new Set(matchingCards.slice(0, 2).map(c => c.id));
-    const hasIntactExitStraight = findValidStraights(player.hand, null).some(
-      s => s.length >= 5 && !s.some(c => chaCardIds.has(c.id)),
-    );
-    if (hasIntactExitStraight) return 'cha';
-  }
+  // Speculative cha paths are only valid when the trigger is NOT a teammate.
+  // If the trigger is a teammate (e.g., they just played the go-single), cha-ing
+  // over them steals their trick — always decline in that case.
+  if (!triggerIsTeammate) {
+    // Hand-shaping: if we hold a 5+ card straight that the cha pair won't break,
+    // cha to thin the hand toward that exit straight even without an opponent skip.
+    {
+      const chaCardIds = new Set(matchingCards.slice(0, 2).map(c => c.id));
+      const hasIntactExitStraight = findValidStraights(player.hand, null).some(
+        s => s.length >= 5 && !s.some(c => chaCardIds.has(c.id)),
+      );
+      if (hasIntactExitStraight) return 'cha';
+    }
 
-  // LOW rank speculative chas: if remaining copies are low (1-2), cha is decent but risky
-  if (afterChaRemaining <= 2) {
-    return Math.random() < 0.6 ? 'cha' : 'decline';
-  }
+    // LOW rank speculative chas: if remaining copies are low (1-2), cha is decent but risky
+    if (afterChaRemaining <= 2) {
+      return Math.random() < 0.6 ? 'cha' : 'decline';
+    }
 
-  // Many copies remaining — chaing just gives someone else position
-  // Only cha if we have a large hand (might as well thin it)
-  if (player.hand.length >= 8) {
-    return Math.random() < 0.3 ? 'cha' : 'decline';
+    // Many copies remaining — chaing just gives someone else position
+    // Only cha if we have a large hand (might as well thin it)
+    if (player.hand.length >= 8) {
+      return Math.random() < 0.3 ? 'cha' : 'decline';
+    }
   }
 
   return 'decline';

@@ -497,6 +497,81 @@ describe('BotManager — doubling selectivity', () => {
   });
 });
 
+describe('BotManager — teammate speculative cha', () => {
+  it('declines speculative cha (hand-shaping path) when the trigger was played by a teammate', () => {
+    // p0 (black10) plays single-4, triggering waiting_cha.
+    // p3 (black10, same team as p0) has two 4s and a 5-9 intact straight.
+    // Hand-shaping would normally cha here (5-card straight is preserved after
+    // removing the two 4s). But the trigger is a teammate, so the bot must decline.
+    const hands: Card[][] = [
+      // p0 black10: plays single 4 to trigger cha-go
+      [card('4', 'hearts', true, 'p0-4h'), card('5', 'hearts', true), card('6', 'hearts', true)],
+      // p1 red10: 4 cards, no 4s
+      [card('Q', 'hearts', true, 'p1-qh'), card('K', 'hearts', true), card('A', 'hearts', true), card('3', 'clubs', false)],
+      // p2 red10: 4 cards, no 4s
+      [card('7', 'clubs', false), card('8', 'clubs', false), card('9', 'clubs', false), card('J', 'clubs', false)],
+      // p3 black10: two 4s + 5-9 straight (intact after cha)
+      [
+        card('4', 'spades', false, 'p3-4s'),
+        card('4', 'clubs', false, 'p3-4c'),
+        card('5', 'spades', false, 'p3-5s'),
+        card('6', 'spades', false, 'p3-6s'),
+        card('7', 'spades', false, 'p3-7s'),
+        card('8', 'spades', false, 'p3-8s'),
+        card('9', 'spades', false, 'p3-9s'),
+      ],
+      // p4 red10: 4 cards, no 4s
+      [card('3', 'diamonds', true), card('6', 'diamonds', true), card('8', 'diamonds', true), card('J', 'diamonds', true)],
+      // p5 black10: 4 cards, no 4s
+      [card('J', 'hearts', true), card('Q', 'clubs', false), card('A', 'clubs', false), card('2', 'clubs', false)],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'black10', 'red10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p0');
+    // p0 plays the single 4 — triggers waiting_cha
+    engine.playCards('p0', [hands[0][0]]);
+    expect(engine.getState().round?.chaGoState?.phase).toBe('waiting_cha');
+
+    // p3 must DECLINE: trigger is teammate p0, speculative cha blocked
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p3');
+    expect(decision.action).toBe('decline_cha');
+  });
+});
+
+describe('BotManager — exit-in-one-play opening', () => {
+  it('plays entire hand as a bomb when the whole hand forms a valid combo', () => {
+    // p0 holds exactly 4 Kings (a bomb). Previously chooseBestOpening would
+    // only consider singles (excluded from pairs/singles because they're a bomb
+    // rank) and fall back to a single K. With the full-hand exit candidate added,
+    // the bomb scores +100 and wins outright.
+    const hands: Card[][] = [
+      [
+        card('K', 'spades', false, 'p0-ks'),
+        card('K', 'hearts', true, 'p0-kh'),
+        card('K', 'clubs', false, 'p0-kc'),
+        card('K', 'diamonds', true, 'p0-kd'),
+      ],
+      // p1-p5: safe hands, 4 cards each, no ≤2 threat
+      [card('3', 'clubs', false, 'p1-3c'), card('4', 'clubs', false, 'p1-4c'), card('5', 'clubs', false, 'p1-5c'), card('6', 'clubs', false, 'p1-6c')],
+      [card('7', 'clubs', false, 'p2-7c'), card('8', 'clubs', false, 'p2-8c'), card('9', 'clubs', false, 'p2-9c'), card('10', 'clubs', false, 'p2-tc')],
+      [card('3', 'hearts', true, 'p3-3h'), card('4', 'hearts', true, 'p3-4h'), card('5', 'hearts', true, 'p3-5h'), card('6', 'hearts', true, 'p3-6h')],
+      [card('7', 'hearts', true, 'p4-7h'), card('8', 'hearts', true, 'p4-8h'), card('9', 'hearts', true, 'p4-9h'), card('J', 'clubs', false, 'p4-jc')],
+      [card('Q', 'clubs', false, 'p5-qc'), card('A', 'clubs', false, 'p5-ac'), card('2', 'clubs', false, 'p5-2c'), card('3', 'diamonds', true, 'p5-3d')],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p0');
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action !== 'play') return;
+    // Must play all 4 Kings as the bomb (not a single K fallback)
+    expect(decision.cards).toHaveLength(4);
+    expect(decision.cards.every(c => c.rank === 'K')).toBe(true);
+  });
+});
+
 describe('BotManager — long straight opening', () => {
   it('prefers a 5-card straight over a 3-card straight when opening', () => {
     // If the bot has a 5-card straight (5-6-7-8-9) and also a 3-card straight
