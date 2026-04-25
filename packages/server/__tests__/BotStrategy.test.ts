@@ -764,3 +764,53 @@ describe('BotManager — cha hand-shaping', () => {
     expect(decision.action).toBe('cha');
   });
 });
+
+describe('BotManager — P3 bomb guard: no bombing over a winning teammate', () => {
+  it('passes instead of bombing when a teammate holds the round under high threat', () => {
+    // Scenario from game 9Q4N R14:
+    // p4 (black10, teammate of p0) just played A♠ single and is winning the round.
+    // p5 (red10, opponent) has 2 cards → highThreat fires.
+    // p0 (black10) has a 3-of-a-kind 8 bomb (8×3).
+    // Before fix: highThreat overrode the teammate-pass guard → p0 bombed over teammate.
+    // After fix: p0 should pass (let teammate win; if opponent can beat A♠ they'll reveal it).
+    const hands: Card[][] = [
+      // p0 (black10): has an 8×3 bomb + 2 other cards
+      [
+        card('8', 'clubs', false, 'p0-8c'),
+        card('8', 'hearts', true, 'p0-8h'),
+        card('8', 'spades', false, 'p0-8s'),
+        card('5', 'clubs', false, 'p0-5c'),
+        card('6', 'clubs', false, 'p0-6c'),
+      ],
+      // p1-p3: filler, many cards so they don't trigger threat
+      [card('4', 'clubs', false), card('7', 'clubs', false), card('9', 'clubs', false),
+       card('10', 'clubs', false), card('J', 'clubs', false), card('Q', 'clubs', false)],
+      [card('4', 'hearts', true), card('7', 'hearts', true), card('9', 'hearts', true),
+       card('10', 'hearts', true), card('J', 'hearts', true), card('Q', 'hearts', true)],
+      [card('3', 'spades', false), card('6', 'spades', false), card('7', 'spades', false),
+       card('9', 'spades', false), card('10', 'spades', false), card('J', 'spades', false)],
+      // p4 (black10, teammate of p0): will play A♠, then has 3 remaining
+      [card('K', 'clubs', false, 'p4-kc'), card('3', 'hearts', true, 'p4-3h'), card('4', 'hearts', true, 'p4-4h')],
+      // p5 (red10, opponent): 2 cards → highThreat
+      [card('2', 'clubs', false, 'p5-2c'), card('3', 'clubs', false, 'p5-3c')],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'black10', 'red10', 'black10', 'red10', 'black10', 'red10',
+    ];
+    const engine = setupEngine(hands, teams, 'p4');
+    // inject A♠ into p4's hand and have p4 open the round with it
+    const aSpade = card('A', 'spades', false, 'p4-as');
+    const state = engine.getState();
+    state.players[4].hand.unshift(aSpade);
+    state.players[4].handSize += 1;
+    engine.playCards('p4', [aSpade]);
+
+    // p5 passes (can't or won't beat A♠)
+    engine.pass('p5');
+
+    // Now it's p0's turn. Teammate p4 is winning with A♠, opponent p5 has 2 cards.
+    // p0 should PASS (not bomb over winning teammate).
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('pass');
+  });
+});

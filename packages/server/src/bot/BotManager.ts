@@ -862,7 +862,11 @@ function smartPlayDecision(
     }
   }
 
-  if (isLastPlayByTeammate && !tryingToExit && !highThreat && !isLastPlayerDangerous) {
+  // Pass when a teammate is winning, even under high threat.
+  // Rationale: if the opponent can't beat the teammate's play they'll pass anyway;
+  // if they can beat it they'll reveal themselves and we still have our bomb for
+  // the follow-up turn. Bombing over a winning teammate wastes a bomb for no gain.
+  if (isLastPlayByTeammate && !tryingToExit) {
     return { action: 'pass' };
   }
 
