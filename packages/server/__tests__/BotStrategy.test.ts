@@ -893,3 +893,48 @@ describe('BotManager — chooseBestOpening: bomb-breaking straight filter', () =
     }
   });
 });
+
+describe('BotManager — chooseBestOpening: all-bomb-rank fallback', () => {
+  it('plays weakest full bomb (not a single) when all cards are bomb-rank', () => {
+    // Hand: 7×3, 9×3, Q×3 — 9 cards, every rank is a bomb rank.
+    // Old behaviour: fallback adds all singles → picks 7♣ (lowest rank single).
+    // New behaviour: fallback adds all bombs → picks 7×3 (3-card, rank 7, score 25).
+    const hands: Card[][] = [
+      [
+        card('7', 'clubs',   false, 'p0-7c'),
+        card('7', 'hearts2', true,  'p0-7h2'),
+        card('7', 'hearts',  true,  'p0-7h'),
+        card('9', 'hearts',  true,  'p0-9h'),
+        card('9', 'clubs2',  false, 'p0-9c2'),
+        card('9', 'spades',  false, 'p0-9s'),
+        card('Q', 'clubs2',  false, 'p0-qc2'),
+        card('Q', 'spades',  false, 'p0-qs'),
+        card('Q', 'clubs',   false, 'p0-qc'),
+      ],
+      [card('3','clubs',false), card('5','clubs',false), card('6','clubs',false),
+       card('7','clubs',false), card('8','clubs',false), card('9','clubs',false), card('10','clubs',false)],
+      [card('3','hearts',true), card('5','hearts',true), card('6','hearts',true),
+       card('7','hearts',true), card('8','hearts',true), card('9','hearts',true), card('10','hearts',true)],
+      [card('3','spades',false), card('5','spades',false), card('6','spades',false),
+       card('7','spades',false), card('8','spades',false), card('9','spades',false), card('10','spades',false)],
+      [card('3','diamonds',true), card('5','diamonds',true), card('6','diamonds',true),
+       card('7','diamonds',true), card('8','diamonds',true), card('9','diamonds',true), card('10','diamonds',true)],
+      [card('4','clubs',false), card('5','clubs2',false), card('6','clubs2',false),
+       card('7','clubs2',false), card('8','clubs2',false), card('J','clubs2',false), card('10','clubs2',false)],
+    ];
+    const teams: ('red10' | 'black10')[] = ['black10','red10','black10','red10','black10','red10'];
+    const engine = setupEngine(hands, teams, 'p0');
+    const state = engine.getState();
+    state.round!.currentFormat = null;
+    state.round!.leaderId = 'p0';
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action === 'play') {
+      // Should play 3 cards (full bomb), not 1 (single from bomb group)
+      expect(decision.cards).toHaveLength(3);
+      // Should be the weakest bomb: rank 7
+      expect(decision.cards.every(c => c.rank === '7')).toBe(true);
+    }
+  });
+});
