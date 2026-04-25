@@ -281,7 +281,9 @@ function DoublingPhase({
           Your Hand
         </h3>
         <div className="flex flex-col items-center pb-2 px-2 sm:px-4 w-full gap-1">
-          {rowsOfGroups.map((rowGroups, rowIdx) => {
+          {(() => {
+            let globalIndex = 0;
+            return rowsOfGroups.map((rowGroups, rowIdx) => {
             const rowCardCount = rowGroups.reduce((s, g) => s + g.length, 0);
             const rowLayout =
               rowsOfGroups.length > 1
@@ -299,13 +301,14 @@ function DoublingPhase({
                       const isSelected = selectedIds.has(card.id);
                       // For black10 team, clicking selects for bomb reveal
                       const canSelect = isMyTurn && !isQuadruplePhase && myTeam === 'black10';
+                      const idx = globalIndex++;
                       return (
                         <div
                           key={card.id}
                           className="transition-all duration-150 hover:-translate-y-2 hover:z-50"
                           style={{
                             marginLeft: cardIdx === 0 ? 0 : `${rowLayout.withinOverlap}px`,
-                            zIndex: cardIdx,
+                            zIndex: idx,
                           }}
                         >
                           <Card
@@ -335,7 +338,8 @@ function DoublingPhase({
                 ))}
               </div>
             );
-          })}
+            });
+          })()}
         </div>
       </div>
     </div>
