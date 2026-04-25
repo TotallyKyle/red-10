@@ -339,7 +339,14 @@ function chooseBestOpening(hand: Card[]): Card[] | null {
     if (fmt) candidates.push([...hand]);
   }
 
-  // Fallback: when all cards are bomb-rank (no safe opening exists), prefer
+  // Lone-single fallback: if only single-card candidates remain and the hand is
+  // large (≥6 cards), add bombs so scoreOpening can pick one — a 3-card bomb
+  // opener sheds more cards and wins the round uncontested by singles.
+  if (candidates.length > 0 && candidates.every(c => c.length === 1) && hand.length >= 6) {
+    candidates.push(...findBombs(hand));
+  }
+
+  // All-bomb-rank fallback: when all cards are bomb-rank (no safe opening exists), prefer
   // the weakest full bomb over a single card from a bomb group — a 3-card bomb
   // sheds more cards, wins the round more reliably, and breaks fewer distinct bombs.
   if (candidates.length === 0) {

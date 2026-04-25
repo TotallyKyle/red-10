@@ -939,4 +939,45 @@ describe('BotManager — chooseBestOpening: all-bomb-rank fallback', () => {
       expect(decision.cards.every(c => c.rank === '7')).toBe(true);
     }
   });
+
+  it('opens with bomb (not lone single) when large hand is mostly bombs', () => {
+    // EYJG 21:05 pattern: Bot Eve had 7 cards — one non-bomb single (5) and
+    // two bombs (6×3 and 3×3). Old behaviour: picks 5 single (only non-bomb candidate).
+    // New behaviour: adds bombs to candidates → picks 3×3 (score 39) over 5 single (32).
+    const hands: Card[][] = [
+      [
+        card('5', 'hearts2', true,  'p0-5h2'),   // lone non-bomb single
+        card('6', 'clubs2',  false, 'p0-6c2'),   // bomb rank
+        card('6', 'hearts',  true,  'p0-6h'),    // bomb rank
+        card('6', 'hearts2', true,  'p0-6h2'),   // bomb rank (6×3)
+        card('3', 'clubs',   false, 'p0-3c'),    // bomb rank
+        card('3', 'hearts',  true,  'p0-3h'),    // bomb rank
+        card('3', 'spades',  false, 'p0-3s'),    // bomb rank (3×3)
+      ],
+      [card('3','clubs',false), card('5','clubs',false), card('6','clubs',false),
+       card('7','clubs',false), card('8','clubs',false), card('9','clubs',false), card('10','clubs',false)],
+      [card('3','hearts',true), card('5','hearts',true), card('6','hearts',true),
+       card('7','hearts',true), card('8','hearts',true), card('9','hearts',true), card('10','hearts',true)],
+      [card('3','spades',false), card('5','spades',false), card('6','spades',false),
+       card('7','spades',false), card('8','spades',false), card('9','spades',false), card('10','spades',false)],
+      [card('3','diamonds',true), card('5','diamonds',true), card('6','diamonds',true),
+       card('7','diamonds',true), card('8','diamonds',true), card('9','diamonds',true), card('10','diamonds',true)],
+      [card('4','clubs',false), card('5','clubs2',false), card('6','clubs2',false),
+       card('7','clubs2',false), card('8','clubs2',false), card('J','clubs2',false), card('10','clubs2',false)],
+    ];
+    const teams: ('red10' | 'black10')[] = ['black10','red10','black10','red10','black10','red10'];
+    const engine = setupEngine(hands, teams, 'p0');
+    const state = engine.getState();
+    state.round!.currentFormat = null;
+    state.round!.leaderId = 'p0';
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action === 'play') {
+      // Should play a 3-card bomb, not the lone single
+      expect(decision.cards.length).toBeGreaterThanOrEqual(3);
+      // Should be one of the bombs (rank 3 or rank 6), not the 5
+      expect(decision.cards.every(c => c.rank === '3' || c.rank === '6')).toBe(true);
+    }
+  });
 });
