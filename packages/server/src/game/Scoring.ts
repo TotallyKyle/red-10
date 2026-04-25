@@ -56,12 +56,14 @@ export function calculateScore(state: GameState): GameResult {
 
     const trappedCount = trapped.length;
     payoutPerTrapped = state.stakeMultiplier * 1;
+    const numWinners = scoringMembers.length;
+    const numLosers = opposingMembers.length;
 
-    // Scoring rule (symmetric pool): the all-trapped pool is exactly
+    // Default scoring rule (symmetric pool): the all-trapped pool is exactly
     // bigTeamSize² × stakeMultiplier, where bigTeamSize is whichever of the
     // two teams is larger. Partial traps scale linearly with trappedCount /
-    // numLosers. This makes the pool — and therefore the total dollars
-    // changing hands — identical when the team configuration is mirrored:
+    // numLosers, so the pool — and total dollars changing hands — is
+    // identical when the team configuration is mirrored:
     //
     //   2v4 trapping all 4 → pool = 16 → -$4 / +$8
     //   4v2 trapping all 2 → pool = 16 → -$8 / +$4
@@ -69,12 +71,23 @@ export function calculateScore(state: GameState): GameResult {
     //   5v1 trapping all 1 → pool = 25 → -$25 / +$5
     //
     // For balanced 3v3 the formula collapses to (stakeMultiplier × trapped)
-    // per side, the natural "$1 per trap per seat" rule.
-    const numWinners = scoringMembers.length;
-    const numLosers = opposingMembers.length;
+    // per side — the natural "$1 per trap per seat" rule.
+    //
+    // Special case (big team wins, partial trap — only happens at 4v2):
+    // the symmetric formula would inflate the per-winner share above what
+    // the table calls. Fall back to the old pairwise rule there — each
+    // winner gets stakeMultiplier × trappedCount, the loser side splits
+    // the resulting pool evenly. The user explicitly carved this case out;
+    // it does not apply to 1v5/5v1 (no partial-trap state exists there) or
+    // to small-team-wins-partial (the symmetric formula already produces
+    // clean integers).
+    const isBigTeamPartialWin =
+      numWinners > numLosers && trappedCount < numLosers;
+
     const bigTeamSize = Math.max(numWinners, numLosers);
-    const totalPool =
-      (bigTeamSize * bigTeamSize * payoutPerTrapped * trappedCount) / numLosers;
+    const totalPool = isBigTeamPartialWin
+      ? payoutPerTrapped * trappedCount * numWinners
+      : (bigTeamSize * bigTeamSize * payoutPerTrapped * trappedCount) / numLosers;
     const amountPerLoser = totalPool / numLosers;
     const amountPerWinner = totalPool / numWinners;
 
