@@ -159,7 +159,7 @@ function ActionBar({
     : null;
 
   return (
-    <div className="flex flex-col items-center gap-1 py-2 sm:py-3 px-2 sm:px-4 bg-green-950/80">
+    <div className="flex flex-col items-center gap-0.5 sm:gap-1 py-1.5 sm:py-3 px-2 sm:px-4 bg-green-950/80">
       {/* Error message */}
       {errorMessage && (
         <div className="text-red-400 text-xs sm:text-sm bg-red-900/40 px-3 py-1 rounded-lg mb-1 max-w-[90vw] text-center">

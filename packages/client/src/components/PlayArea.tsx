@@ -81,8 +81,11 @@ function PlayArea({ round, players, lastRoundWin }: PlayAreaProps) {
   const formatLabel = round.currentFormat ? FORMAT_LABELS[round.currentFormat] ?? round.currentFormat : null;
   const chaGo = round.chaGoState;
 
-  // Get the last 3 plays for history display
-  const recentPlays = round.plays.slice(-3);
+  // History plays. On mobile we skip them — vertical space is precious and the
+  // game log already shows the full history. Desktop keeps the last 1 play
+  // faded above the current one for context.
+  const isMobile = viewportWidth < 640;
+  const recentPlays = isMobile ? round.plays.slice(-1) : round.plays.slice(-2);
   const olderPlays = recentPlays.slice(0, -1);
   const currentPlay = recentPlays[recentPlays.length - 1] ?? null;
 
@@ -95,9 +98,10 @@ function PlayArea({ round, players, lastRoundWin }: PlayAreaProps) {
         </span>
       )}
 
-      {/* Cha-go indicator */}
+      {/* Cha-go indicator — desktop only. Mobile shows the same status in
+          the ActionBar, so duplicating here would cost ~40px of table area. */}
       {chaGo && (
-        <div className="flex flex-col items-center gap-0.5">
+        <div className="hidden sm:flex flex-col items-center gap-0.5">
           <span className="text-amber-400 text-[10px] sm:text-xs font-bold uppercase tracking-wider animate-pulse">
             Cha-Go: {chaGo.triggerRank}
           </span>

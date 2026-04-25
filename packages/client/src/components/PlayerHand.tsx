@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Card as CardType } from '@red10/shared';
 import { RANK_ORDER } from '@red10/shared';
 import Card from './Card.js';
-import { useViewportWidth } from '../hooks/useViewport.js';
+import { useViewportWidth, useViewportHeight } from '../hooks/useViewport.js';
 
 interface PlayerHandProps {
   cards: CardType[];
@@ -201,12 +201,19 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   const groups = groupByRank(displayCards);
   const selectedIds = new Set(selectedCards.map((c) => c.id));
   const viewportWidth = useViewportWidth();
+  const viewportHeight = useViewportHeight();
 
   // On narrow phones a 13-card hand packs so tight that ranks blur together.
   // Split into 2 rows once the hand is large enough that single-row cards would
   // be heavily occluded. Each row then lays out independently with its own
   // size/overlap, so the cards grow (e.g. md → xl) and rank labels stay legible.
-  const splitRows = viewportWidth < 640 && cards.length > 9 ? 2 : 1;
+  //
+  // BUT: on short viewports (e.g. iPhone SE 667px), a 2-row xl hand eats so
+  // much vertical space that the table area shrinks below the play area's
+  // minimum, causing seat/play overlap. Force single row when viewport is
+  // short — adaptive card sizing keeps it readable, just smaller.
+  const splitRows =
+    viewportWidth < 640 && cards.length > 9 && viewportHeight >= 750 ? 2 : 1;
   const rowsOfGroups = splitGroupsIntoRows(groups, splitRows);
 
   // Single-row layout (fallback and desktop/tablet path) still needs one
@@ -295,7 +302,7 @@ function PlayerHand({ cards, selectedCards, onToggleCard }: PlayerHandProps) {
   let globalIndex = 0;
 
   return (
-    <div className="flex flex-col items-center pb-3 px-2 sm:px-4 w-full gap-1">
+    <div className="flex flex-col items-center pb-1 sm:pb-3 px-2 sm:px-4 w-full gap-0.5 sm:gap-1">
       {rowsOfGroups.map((rowGroups, rowIdx) => {
         // Per-row layout so each row is sized independently. On multi-row
         // phones this lets a 7+6 split use xl cards on both rows rather

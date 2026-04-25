@@ -26,10 +26,6 @@ interface GameTableProps {
 }
 
 /**
- * Position definitions for 5 other players around the table.
- * Index 0 = directly across (top-center), then clockwise.
- */
-/**
  * Seat positions for 5 other players around a table, clockwise from the
  * bottom-center player's perspective.
  *
@@ -44,37 +40,37 @@ interface GameTableProps {
  *
  * Index 0 = next player clockwise (to my left)
  * Index 4 = player just before me (to my right)
+ *
+ * Coordinates are now relative to the table area (the flex-1 region above
+ * the bottom UI stack), not the full viewport — see GameTable's flex column.
  */
 const POSITIONS = [
   // Seat +1: bottom left (next player clockwise)
-  { bottom: '28%', left: '4%' },
+  { bottom: '6%', left: '4%' },
   // Seat +2: top left
-  { top: '18%', left: '4%' },
+  { top: '20%', left: '4%' },
   // Seat +3: top center (across)
   { top: '4%', left: '50%', transform: 'translateX(-50%)' },
   // Seat +4: top right
-  { top: '18%', right: '4%' },
+  { top: '20%', right: '4%' },
   // Seat +5: bottom right (player just before me)
-  { bottom: '28%', right: '4%' },
+  { bottom: '6%', right: '4%' },
 ] as const;
 
 /**
- * Mobile positions.
+ * Mobile positions, relative to the table area.
  *
  * The top-center player (seat +3, across) sits BELOW the status strip and has
  * enough headroom that the turn timer / team badge / stake indicator don't
  * visually overlap the player chip. Corners are pulled in tighter so they
- * clear both the top status strip and the bottom hand.
+ * sit just inside the ellipse curve.
  */
-// On phones the hand spans 2 rows of xl cards + name/action bars, so the
-// bottom UI stack is ~24rem tall. Bottom seat tiles sit just above that so
-// the hand never covers them.
 const MOBILE_POSITIONS = [
-  { bottom: '24.5rem', left: '2%' },
-  { top: '11%', left: '2%' },
+  { bottom: '4%', left: '2%' },
+  { top: '15%', left: '2%' },
   { top: '2.5rem', left: '50%', transform: 'translateX(-50%)' },
-  { top: '11%', right: '2%' },
-  { bottom: '24.5rem', right: '2%' },
+  { top: '15%', right: '2%' },
+  { bottom: '4%', right: '2%' },
 ] as const;
 
 function GameTable({
@@ -109,11 +105,11 @@ function GameTable({
       : null;
 
   return (
-    <div className="min-h-screen bg-green-900 relative overflow-hidden">
+    <div className="h-dvh bg-green-900 relative overflow-hidden flex flex-col">
       {/* Game info bar — occupies the left half of the top row on mobile
           so the Game Log button (right half) and the seat-3 player (below)
-          don't collide. */}
-      <div className="absolute top-2 left-2 right-24 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-10 flex gap-1.5 sm:gap-3 items-center">
+          don't collide. Positioned absolute so it overlays the table area. */}
+      <div className="absolute top-2 left-2 right-24 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-30 flex gap-1.5 sm:gap-3 items-center">
         <span className={`text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${
           gameView.myTeam === 'red10'
             ? 'bg-red-600 text-white'
@@ -136,55 +132,55 @@ function GameTable({
         )}
       </div>
 
-      {/* Table surface — on phones the hand can span 2 rows (see PlayerHand's
-          row-splitting logic), so the oval shrinks to ~23rem from the bottom
-          to reserve room for name label + 2-row hand + action bar. */}
-      <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-[23rem] sm:bottom-36 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
+      {/* Table area — flex-1 so it fills whatever's left after the bottom UI
+          stack takes its natural height. Other-player chips, the ellipse,
+          and the play area all sit absolutely within this region. */}
+      <div className="flex-1 relative min-h-0">
+        {/* Table surface */}
+        <div className="absolute inset-4 sm:inset-8 top-10 sm:top-12 bottom-2 sm:bottom-2 rounded-[50%] bg-green-800 border-4 border-green-700 shadow-inner" />
 
-      {/* Center play area — anchored to the middle of the TABLE (which now
-          stops at bottom-48 on mobile), not the viewport, so it doesn't push
-          into the hand area. */}
-      <div className="absolute top-[calc(50%_-_2rem)] sm:top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
-        <PlayArea round={gameView.round} players={gameView.players} lastRoundWin={gameView.lastRoundWin} />
+        {/* Center play area — centered within the table area. */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+          <PlayArea round={gameView.round} players={gameView.players} lastRoundWin={gameView.lastRoundWin} />
+        </div>
+
+        {/* Other players */}
+        {otherPlayers.map((player, index) => {
+          const pos = POSITIONS[index];
+          if (!pos) return null;
+          const isCurrentTurn = gameView.round?.currentPlayerId === player.id;
+          return (
+            <div
+              key={player.id}
+              className="absolute z-10 hidden sm:block"
+              style={pos as React.CSSProperties}
+            >
+              <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} />
+            </div>
+          );
+        })}
+        {/* Mobile player positions */}
+        {otherPlayers.map((player, index) => {
+          const pos = MOBILE_POSITIONS[index];
+          if (!pos) return null;
+          const isCurrentTurn = gameView.round?.currentPlayerId === player.id;
+          return (
+            <div
+              key={`mobile-${player.id}`}
+              className="absolute z-10 sm:hidden"
+              style={pos as React.CSSProperties}
+            >
+              <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} compact />
+            </div>
+          );
+        })}
       </div>
 
-      {/* Other players */}
-      {otherPlayers.map((player, index) => {
-        const pos = POSITIONS[index];
-        if (!pos) return null;
-        const isCurrentTurn = gameView.round?.currentPlayerId === player.id;
-        return (
-          <div
-            key={player.id}
-            className="absolute z-10 hidden sm:block"
-            style={pos as React.CSSProperties}
-          >
-            <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} />
-          </div>
-        );
-      })}
-      {/* Mobile player positions */}
-      {otherPlayers.map((player, index) => {
-        const pos = MOBILE_POSITIONS[index];
-        if (!pos) return null;
-        const isCurrentTurn = gameView.round?.currentPlayerId === player.id;
-        return (
-          <div
-            key={`mobile-${player.id}`}
-            className="absolute z-10 sm:hidden"
-            style={pos as React.CSSProperties}
-          >
-            <OtherPlayer player={player} isCurrentTurn={isCurrentTurn} compact />
-          </div>
-        );
-      })}
-
-      {/* Bottom UI stack — player name, hand, action bar all in one flex
-          column so they never overlap. The ellipse table reserves space for
-          this via `bottom-32 sm:bottom-36` above. When it's my turn the whole
-          stack gets a glowing yellow ring so it's unmistakable. */}
+      {/* Bottom UI stack — player name, hand, action bar in a flex column.
+          Takes its natural height; the table area above shrinks/grows to fit.
+          When it's my turn the whole stack gets a glowing yellow ring. */}
       <div
-        className={`absolute bottom-0 left-0 right-0 z-20 flex flex-col transition-all ${
+        className={`shrink-0 z-20 flex flex-col transition-all ${
           gameView.isMyTurn
             ? 'ring-4 ring-yellow-400 ring-inset shadow-[0_-10px_32px_rgba(250,204,21,0.45)] animate-your-turn-glow'
             : ''
@@ -192,7 +188,7 @@ function GameTable({
       >
         {/* Player name label */}
         <div
-          className={`text-center pb-1 sm:pb-2 pt-1 flex items-center justify-center gap-1.5 ${
+          className={`text-center pb-0.5 sm:pb-2 pt-0.5 sm:pt-1 flex items-center justify-center gap-1.5 ${
             gameView.isMyTurn
               ? 'bg-gradient-to-t from-yellow-600/70 to-yellow-900/30'
               : 'bg-gradient-to-t from-green-900/60 to-transparent'

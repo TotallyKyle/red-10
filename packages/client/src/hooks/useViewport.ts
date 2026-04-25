@@ -23,3 +23,23 @@ export function useViewportWidth(): number {
 
   return width;
 }
+
+/** Track viewport height (with resize/orientation listeners). */
+export function useViewportHeight(): number {
+  const [height, setHeight] = useState<number>(() =>
+    typeof window === 'undefined' ? 768 : window.innerHeight,
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setHeight(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+
+  return height;
+}
