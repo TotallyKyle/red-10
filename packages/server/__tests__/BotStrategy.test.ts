@@ -448,11 +448,14 @@ describe('BotManager — doubling selectivity', () => {
   });
 
   it('doubles on a genuinely strong hand with 2 bombs', () => {
-    // 2 distinct bombs is real power — should double.
+    // One 4-card bomb (5×4) + one 3-card bomb (K×3) = score 9, meets the bar.
+    // Two ×3 bombs alone only score 7 and are no longer enough — sparse singles
+    // make the hand hard to play out efficiently.
     const hand: Card[] = [
       card('5', 'hearts', true, 'b1a'),
       card('5', 'spades', false, 'b1b'),
       card('5', 'clubs', false, 'b1c'),
+      card('5', 'diamonds', false, 'b1d'),
       card('K', 'hearts', true, 'b2a'),
       card('K', 'spades', false, 'b2b'),
       card('K', 'clubs', false, 'b2c'),
@@ -462,7 +465,6 @@ describe('BotManager — doubling selectivity', () => {
       card('9', 'diamonds', true),
       card('J', 'clubs', false),
       card('Q', 'hearts', true),
-      card('A', 'spades', false),
     ];
     const engine = setupForDoubling(hand, 'black10');
     const decision = AggressiveStrategy.decideDoubling(engine, 'p0');

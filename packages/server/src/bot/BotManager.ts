@@ -107,7 +107,6 @@ function findValidPairs(hand: Card[], lastPlay: import('@red10/shared').Play | n
       if (lastPlay === null || canBeat(pair, lastPlay)) results.push(pair);
     }
   }
-  if (results.length === 0 && preserveBombs) return findValidPairs(hand, lastPlay, false);
   return results;
 }
 
@@ -172,19 +171,6 @@ function findValidPairedStraights(hand: Card[], lastPlay: import('@red10/shared'
   return results;
 }
 
-function findOpeningPlays(hand: Card[]): Card[][] {
-  const results: Card[][] = [];
-  for (const c of hand) results.push([c]);
-  const groups = groupByRank(hand);
-  for (const [, cards] of groups) {
-    if (cards.length >= 2) results.push([cards[0], cards[1]]);
-  }
-  results.push(...findValidStraights(hand, null));
-  results.push(...findValidPairedStraights(hand, null));
-  results.push(...findBombs(hand));
-  return results;
-}
-
 export function findBeatingPlays(hand: Card[], lastPlay: import('@red10/shared').Play, preserveBombs = false): Card[][] {
   const results: Card[][] = [];
   const format = lastPlay.format;
@@ -205,10 +191,6 @@ export function findBeatingPlays(hand: Card[], lastPlay: import('@red10/shared')
   // so we can always add bombs as an option.
   results.push(...findBombs(hand));
   return results;
-}
-
-function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 function sortByLowestRank(plays: Card[][]): Card[][] {
@@ -688,6 +670,13 @@ function decideChaGo(
       return 'cha';
     }
 
+    // Bomb-preservation gate: if cha would reduce a bomb-rank group below 3 cards
+    // (i.e., we hold ×3 or ×4 of the trigger rank), playing a 2-card pair destroys
+    // the bomb. Only the two critical reasons above justify that cost — decline here.
+    if (matchingCards.length >= 3 && matchingCards.length - 2 < 3) {
+      return 'decline';
+    }
+
     // HIGH rank cutoff: for 2s and Aces, we stop here unless it's a clear skip.
     // No "skip any opponent" or "thin hand" justifies burning a power card.
     if (isHighRank) {
@@ -784,11 +773,16 @@ function smartPlayDecision(
 
     if (tc.length >= 2) {
       const decision = decideChaGo(engine, playerId, triggerRank, tc);
-      if (decision === 'go_cha' && tc.length >= 3 && validActions.includes('go_cha')) {
-        return { action: 'go_cha', cards: tc.slice(0, 3) };
-      }
-      if (decision === 'cha' && validActions.includes('cha')) {
-        return { action: 'cha', cards: tc.slice(0, 2) };
+      if (decision === 'cha') {
+        // When we hold exactly 3 of the trigger rank and go_cha is valid, playing all
+        // 3 as go_cha is strictly better than cha: same skip effect but uses all cards
+        // cleanly rather than leaving 1 stranded.
+        if (tc.length === 3 && validActions.includes('go_cha')) {
+          return { action: 'go_cha', cards: tc.slice(0, 3) };
+        }
+        if (validActions.includes('cha')) {
+          return { action: 'cha', cards: tc.slice(0, 2) };
+        }
       }
     }
     if (validActions.includes('decline_cha')) return { action: 'decline_cha' };
@@ -917,10 +911,16 @@ function smartPlayDecision(
       return { action: 'play', cards: [player.hand[0]] };
     }
 
-    // (b) Teammate has 1-2 cards — lead with singles to give them a chance to play out
+    // (b) Teammate has 1-2 cards — lead with singles to give them a chance to play out.
+    // Prefer non-2 singles: a 2-single wins the round but wastes a power card and may
+    // block the teammate from playing their remaining card(s) this round.
     if (teammateMinHand <= 2 && !highThreat) {
       const singles = findValidSingles(player.hand, null, true);
-      if (singles.length > 0) return { action: 'play', cards: sortByLowestRank(singles)[0] };
+      if (singles.length > 0) {
+        const nonTwo = singles.filter(s => s[0].rank !== '2');
+        const pool = nonTwo.length > 0 ? nonTwo : singles;
+        return { action: 'play', cards: sortByLowestRank(pool)[0] };
+      }
     }
 
     // (c) Opponent has 1 card — lead with multi-card plays they can't match.
@@ -1026,13 +1026,19 @@ function smartPlayDecision(
 
       const playMinRank = Math.min(...cheapest.map(c => rankValue(c.rank)));
       const isBombPlay = classifyBomb(cheapest) !== null;
-      // A 2-card pair from a bomb-rank group (≥3 of that rank in hand) is bomb-breaking:
-      // playing it destroys the 3-of-a-kind, same strategic cost as a bomb.
+      // A play is bomb-breaking if it reduces any bomb-rank group below 3 cards,
+      // destroying the bomb. This covers both 2-card pairs and straights that
+      // consume a card from a 3-of-a-kind group.
       const bombRanksInHand = getBombRanks(player.hand);
+      const handGroups = groupByRank(player.hand);
       const isBreakingBomb =
         !isBombPlay &&
-        cheapest.length === 2 &&
-        bombRanksInHand.has(cheapest[0].rank);
+        cheapest.some(c => {
+          if (!bombRanksInHand.has(c.rank)) return false;
+          const groupSize = handGroups.get(c.rank)?.length ?? 0;
+          const playCount = cheapest.filter(x => x.rank === c.rank).length;
+          return groupSize - playCount < 3;
+        });
 
       // --- P1: trying to exit — always play ---
       if (tryingToExit) {
@@ -1117,8 +1123,7 @@ function smartPlayDecision(
 export const AggressiveStrategy: PlayerStrategy = {
   name: 'Aggressive',
   decideDoubling(engine, playerId) {
-    // Still relatively aggressive — double with strength >= 7
-    return standardDoublingDecision(engine, playerId, 7);
+    return standardDoublingDecision(engine, playerId, 9);
   },
   decidePlay(engine, playerId) {
     return smartPlayDecision(engine, playerId);
@@ -1128,8 +1133,7 @@ export const AggressiveStrategy: PlayerStrategy = {
 export const SmartRacerStrategy: PlayerStrategy = {
   name: 'SmartRacer',
   decideDoubling(engine, playerId) {
-    // Moderate — double with strength >= 8
-    return standardDoublingDecision(engine, playerId, 8);
+    return standardDoublingDecision(engine, playerId, 9);
   },
   decidePlay(engine, playerId) {
     return smartPlayDecision(engine, playerId);
@@ -1184,61 +1188,6 @@ export const TeamCoordinatorStrategy: PlayerStrategy = {
   },
 };
 
-export const RandomStrategy: PlayerStrategy = {
-  name: 'Random',
-  decideDoubling() {
-    return { action: 'skip' };
-  },
-  decidePlay(engine, playerId) {
-    const state = engine.getState();
-    const validActions = engine.getValidActions(playerId);
-    const player = state.players.find(p => p.id === playerId)!;
-    const round = state.round;
-
-    if (validActions.includes('go_cha') && round?.chaGoState) {
-      const tc = player.hand.filter(c => c.rank === round.chaGoState!.triggerRank);
-      if (tc.length >= 3 && Math.random() < 0.5) return { action: 'go_cha', cards: tc.slice(0, 3) };
-    }
-    if (validActions.includes('cha') && round?.chaGoState) {
-      const tc = player.hand.filter(c => c.rank === round.chaGoState!.triggerRank);
-      if (tc.length >= 2 && Math.random() < 0.5) return { action: 'cha', cards: tc.slice(0, 2) };
-    }
-    if (validActions.includes('decline_cha')) return { action: 'decline_cha' };
-    if (validActions.includes('defuse') && round?.lastPlay?.specialBomb) {
-      const needed = round.lastPlay.specialBomb === 'red10_2' ? 2 : 3;
-      const bt = player.hand.filter(c => isBlackTen(c));
-      if (bt.length >= needed && Math.random() < 0.3) return { action: 'defuse', cards: bt.slice(0, needed) };
-    }
-    if (!validActions.includes('play')) return { action: 'pass' };
-
-    if (round && round.currentFormat === null && round.leaderId === playerId) {
-      const op = findOpeningPlays(player.hand);
-      if (op.length > 0) return { action: 'play', cards: pickRandom(op) };
-      return { action: 'play', cards: [player.hand[0]] };
-    }
-
-    if (round?.lastPlay) {
-      if (round.chaGoState?.phase === 'waiting_go') {
-        const tc = player.hand.filter(c => c.rank === round.chaGoState!.triggerRank);
-        if (tc.length >= 1 && Math.random() < 0.5) return { action: 'play', cards: [tc[0]] };
-        return { action: 'pass' };
-      }
-      if (Math.random() < 0.5) {
-        const bp = findBeatingPlays(player.hand, round.lastPlay);
-        if (bp.length > 0) return { action: 'play', cards: pickRandom(bp) };
-      }
-      if (validActions.includes('pass')) return { action: 'pass' };
-    }
-
-    if (round && round.currentFormat === null) {
-      const op = findOpeningPlays(player.hand);
-      if (op.length > 0) return { action: 'play', cards: pickRandom(op) };
-    }
-
-    return { action: 'pass' };
-  },
-};
-
 // ---- Bot Player Interface ----
 
 export interface BotPlayer {
@@ -1255,7 +1204,6 @@ const ALL_STRATEGIES: PlayerStrategy[] = [
   HandSizeExploiterStrategy,
   TeamCoordinatorStrategy,
   AggressiveStrategy,
-  RandomStrategy,
 ];
 
 const BOT_NAMES = ['Bot Alice', 'Bot Bob', 'Bot Charlie', 'Bot Dave', 'Bot Eve'];
