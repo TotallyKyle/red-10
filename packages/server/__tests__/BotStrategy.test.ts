@@ -496,3 +496,158 @@ describe('BotManager — doubling selectivity', () => {
     expect(TeamCoordinatorStrategy.decideDoubling(engine, 'p0').action).toBe('skip');
   });
 });
+
+describe('BotManager — long straight opening', () => {
+  it('prefers a 5-card straight over a 3-card straight when opening', () => {
+    // If the bot has a 5-card straight (5-6-7-8-9) and also a 3-card straight
+    // (5-6-7), it should open with the 5-card version to shed more cards.
+    const hands: Card[][] = [
+      [
+        card('5', 'spades', false, 'p0-5'),
+        card('6', 'hearts', true, 'p0-6'),
+        card('7', 'clubs', false, 'p0-7'),
+        card('8', 'diamonds', true, 'p0-8'),
+        card('9', 'spades', false, 'p0-9'),
+        card('3', 'clubs', false, 'p0-3'),
+        card('J', 'hearts', true, 'p0-j'),
+      ],
+      [card('4', 'clubs', false), card('10', 'clubs', false), card('Q', 'clubs', false)],
+      [card('3', 'hearts', true), card('K', 'clubs', false), card('A', 'clubs', false)],
+      [card('4', 'hearts', true), card('8', 'clubs', false), card('2', 'clubs', false)],
+      [card('6', 'clubs', false), card('9', 'clubs', false), card('Q', 'hearts', true)],
+      [card('7', 'hearts', true), card('J', 'clubs', false), card('K', 'hearts', true)],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p0');
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action !== 'play') return;
+    // Should play the 5-card straight (all five consecutive cards)
+    expect(decision.cards.length).toBe(5);
+  });
+
+  it('opens with a 7-card straight when holding consecutive ranks', () => {
+    // Holding 3-4-5-6-7-8-9 (7 consecutive): should open all 7 at once.
+    const hands: Card[][] = [
+      [
+        card('3', 'spades', false, 'p0-3'),
+        card('4', 'hearts', true, 'p0-4'),
+        card('5', 'clubs', false, 'p0-5'),
+        card('6', 'diamonds', true, 'p0-6'),
+        card('7', 'spades', false, 'p0-7'),
+        card('8', 'hearts', true, 'p0-8'),
+        card('9', 'clubs', false, 'p0-9'),
+        card('Q', 'spades', false, 'p0-q'),
+        card('K', 'hearts', true, 'p0-k'),
+      ],
+      [card('4', 'clubs', false), card('10', 'clubs', false), card('J', 'clubs', false)],
+      [card('3', 'hearts', true), card('A', 'clubs', false), card('2', 'clubs', false)],
+      [card('5', 'hearts', true), card('8', 'clubs', false), card('J', 'hearts', true)],
+      [card('6', 'clubs', false), card('9', 'hearts', true), card('Q', 'clubs', false)],
+      [card('7', 'clubs', false), card('10', 'hearts', true), card('K', 'clubs', false)],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p0');
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action !== 'play') return;
+    // Should play the full 7-card straight
+    expect(decision.cards.length).toBe(7);
+  });
+});
+
+describe('BotManager — near-exit play preference', () => {
+  it('plays an A-pair to reach exit range even when P6 conservation would pass', () => {
+    // Scenario: p5 (opponent) just opened with a pair of 3s. p0 (red10) has 4 cards:
+    // an A-pair + 2 other cards. P6 rank conservation would normally save the A-pair
+    // against such a low-rank play, but near-exit overrides — playing leaves 2 cards.
+    // opponentMinHand = 5 (no threat, so P5 medThreat doesn't fire).
+    const hands: Card[][] = [
+      // p0: A-pair + 2 filler cards (4 total)
+      [
+        card('A', 'spades', false, 'p0-as'),
+        card('A', 'hearts', true, 'p0-ah'),
+        card('7', 'clubs', false, 'p0-7c'),
+        card('8', 'spades', false, 'p0-8s'),
+      ],
+      [card('Q', 'clubs', false), card('J', 'clubs', false), card('10', 'clubs', false),
+       card('9', 'clubs', false), card('6', 'clubs', false)],
+      [card('3', 'hearts', true), card('4', 'clubs', false), card('K', 'clubs', false),
+       card('Q', 'hearts', true), card('J', 'hearts', true)],
+      [card('5', 'hearts', true), card('6', 'clubs', false), card('10', 'hearts', true),
+       card('9', 'hearts', true), card('8', 'hearts', true)],
+      [card('7', 'hearts', true), card('8', 'clubs', false), card('5', 'clubs', false),
+       card('4', 'hearts', true), card('6', 'hearts', true)],
+      // p5: opener, plays pair of 3s then goes to 3 cards
+      [card('3', 'spades', false, 'p5-3s'), card('3', 'clubs', false, 'p5-3c'),
+       card('K', 'spades', false), card('Q', 'spades', false), card('J', 'spades', false)],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p5');
+
+    // p5 plays a pair of 3s (lowest pair)
+    engine.playCards('p5', [hands[5][0], hands[5][1]]);
+
+    // p0 is next. Has A-pair — P6 conservation would pass (A >> 3 rank gap),
+    // but near-exit kicks in: playing A-pair leaves 2 cards (→ exit range).
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action !== 'play') return;
+    expect(decision.cards).toHaveLength(2);
+    expect(decision.cards[0].rank).toBe('A');
+  });
+});
+
+describe('BotManager — cha hand-shaping', () => {
+  it('chas at low rank when it preserves an intact 5-card exit straight', () => {
+    // p0 plays a low single (rank 4), p1 has two 4s to cha.
+    // p1 also holds a 5-card straight (7-8-9-10-J) that doesn't use any 4s.
+    // Even though no opponent skip is available, p1 should cha to thin the hand.
+    const hands: Card[][] = [
+      // p0: plays 4♥ single to trigger cha
+      [card('4', 'hearts', true, 'p0-4h'), card('Q', 'spades', false), card('K', 'spades', false)],
+      // p1: two 4s + 5-card straight 7-J + a filler
+      [
+        card('4', 'spades', false, 'p1-4s'),
+        card('4', 'clubs', false, 'p1-4c'),
+        card('7', 'hearts', true, 'p1-7'),
+        card('8', 'spades', false, 'p1-8'),
+        card('9', 'clubs', false, 'p1-9'),
+        card('10', 'hearts', true, 'p1-10'),
+        card('J', 'spades', false, 'p1-j'),
+        card('3', 'clubs', false, 'p1-3'),
+      ],
+      // p2-p5: all have many cards so no opponent is near-exit
+      [card('5', 'clubs', false), card('6', 'clubs', false), card('8', 'clubs', false),
+       card('9', 'hearts', true), card('Q', 'clubs', false)],
+      [card('3', 'hearts', true), card('5', 'hearts', true), card('K', 'clubs', false),
+       card('A', 'clubs', false), card('2', 'clubs', false)],
+      [card('6', 'hearts', true), card('7', 'clubs', false), card('J', 'clubs', false),
+       card('Q', 'hearts', true), card('K', 'hearts', true)],
+      [card('10', 'clubs', false), card('J', 'hearts', true), card('A', 'hearts', true),
+       card('2', 'spades', false), card('6', 'spades', false)],
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'red10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupEngine(hands, teams, 'p0');
+    engine.playCards('p0', [hands[0][0]]);
+
+    // Verify cha-go is active on rank 4
+    expect(engine.getState().round?.chaGoState?.phase).toBe('waiting_cha');
+    expect(engine.getState().round?.chaGoState?.triggerRank).toBe('4');
+
+    // p1 should cha: rank 4 is low, no opponents are near-exit,
+    // but p1 holds 7-8-9-10-J straight that cha-ing won't break.
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p1');
+    expect(decision.action).toBe('cha');
+  });
+});

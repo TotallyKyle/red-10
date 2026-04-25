@@ -115,18 +115,26 @@ function findValidStraights(hand: Card[], lastPlay: import('@red10/shared').Play
   const groups = groupByRank(hand);
   const sortedRanks = [...groups.keys()].sort((a, b) => rankValue(a) - rankValue(b));
   const results: Card[][] = [];
-  const targetLen = lastPlay?.length ?? 3;
 
-  for (let startIdx = 0; startIdx <= sortedRanks.length - targetLen; startIdx++) {
-    const candidate: Card[] = [];
-    for (let len = 0; len < targetLen && startIdx + len < sortedRanks.length; len++) {
-      const rank = sortedRanks[startIdx + len];
-      candidate.push(groups.get(rank)![0]);
-    }
-    if (candidate.length === targetLen) {
-      const fmt = detectFormat(candidate);
-      if (fmt === 'straight') {
-        if (lastPlay === null || canBeat(candidate, lastPlay)) results.push(candidate);
+  // When responding, must match exact length of the play to beat.
+  // When opening, enumerate all straight lengths ≥ 3 so the bot can choose
+  // a 5- or 7-card straight instead of being locked into 3-card windows.
+  const lengths: number[] = lastPlay
+    ? [lastPlay.length]
+    : Array.from({ length: Math.max(0, sortedRanks.length - 2) }, (_, i) => i + 3);
+
+  for (const targetLen of lengths) {
+    for (let startIdx = 0; startIdx <= sortedRanks.length - targetLen; startIdx++) {
+      const candidate: Card[] = [];
+      for (let len = 0; len < targetLen; len++) {
+        const rank = sortedRanks[startIdx + len];
+        candidate.push(groups.get(rank)![0]);
+      }
+      if (candidate.length === targetLen) {
+        const fmt = detectFormat(candidate);
+        if (fmt === 'straight') {
+          if (lastPlay === null || canBeat(candidate, lastPlay)) results.push(candidate);
+        }
       }
     }
   }
@@ -139,18 +147,25 @@ function findValidPairedStraights(hand: Card[], lastPlay: import('@red10/shared'
     .filter(([, cards]) => cards.length >= 2)
     .sort((a, b) => rankValue(a[0]) - rankValue(b[0]));
   const results: Card[][] = [];
-  const targetPairs = lastPlay ? lastPlay.length / 2 : 3;
 
-  for (let startIdx = 0; startIdx <= pairableRanks.length - targetPairs; startIdx++) {
-    const candidate: Card[] = [];
-    for (let len = 0; len < targetPairs && startIdx + len < pairableRanks.length; len++) {
-      const cards = pairableRanks[startIdx + len][1];
-      candidate.push(cards[0], cards[1]);
-    }
-    if (candidate.length === targetPairs * 2) {
-      const fmt = detectFormat(candidate);
-      if (fmt === 'paired_straight') {
-        if (lastPlay === null || canBeat(candidate, lastPlay)) results.push(candidate);
+  // When responding, must match exact pair count; when opening, enumerate all
+  // valid pair counts ≥ 2 so the bot can open with a 4- or 8-card paired_straight.
+  const pairCounts: number[] = lastPlay
+    ? [lastPlay.length / 2]
+    : Array.from({ length: Math.max(0, pairableRanks.length - 1) }, (_, i) => i + 2);
+
+  for (const targetPairs of pairCounts) {
+    for (let startIdx = 0; startIdx <= pairableRanks.length - targetPairs; startIdx++) {
+      const candidate: Card[] = [];
+      for (let len = 0; len < targetPairs && startIdx + len < pairableRanks.length; len++) {
+        const cards = pairableRanks[startIdx + len][1];
+        candidate.push(cards[0], cards[1]);
+      }
+      if (candidate.length === targetPairs * 2) {
+        const fmt = detectFormat(candidate);
+        if (fmt === 'paired_straight') {
+          if (lastPlay === null || canBeat(candidate, lastPlay)) results.push(candidate);
+        }
       }
     }
   }
@@ -673,6 +688,16 @@ function decideChaGo(
   // No skip value. For high/med ranks, never cha speculatively.
   if (isHighRank || isMedRank) return 'decline';
 
+  // Hand-shaping: if we hold a 5+ card straight that the cha pair won't break,
+  // cha to thin the hand toward that exit straight even without an opponent skip.
+  {
+    const chaCardIds = new Set(matchingCards.slice(0, 2).map(c => c.id));
+    const hasIntactExitStraight = findValidStraights(player.hand, null).some(
+      s => s.length >= 5 && !s.some(c => chaCardIds.has(c.id)),
+    );
+    if (hasIntactExitStraight) return 'cha';
+  }
+
   // LOW rank speculative chas: if remaining copies are low (1-2), cha is decent but risky
   if (afterChaRemaining <= 2) {
     return Math.random() < 0.6 ? 'cha' : 'decline';
@@ -960,6 +985,17 @@ function smartPlayDecision(
       // --- P1: trying to exit — always play ---
       if (tryingToExit) {
         return { action: 'play', cards: cheapest };
+      }
+
+      // --- Near-exit: a beating play would bring hand to ≤2 cards ---
+      // Treat this as urgently as P1 — getting into exit range is high priority.
+      // Non-bomb plays: any time hand ≤ 7. Bombs: only when hand ≤ 5.
+      if (handSize <= 7) {
+        const nearExitPlay = sorted.find(play => {
+          const isBomb = classifyBomb(play) !== null;
+          return handSize - play.length <= 2 && (!isBomb || handSize <= 5);
+        });
+        if (nearExitPlay) return { action: 'play', cards: nearExitPlay };
       }
 
       // --- P3: blocking dangerous opponents ---
