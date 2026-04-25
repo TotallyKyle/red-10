@@ -1006,6 +1006,13 @@ function smartPlayDecision(
 
       const playMinRank = Math.min(...cheapest.map(c => rankValue(c.rank)));
       const isBombPlay = classifyBomb(cheapest) !== null;
+      // A 2-card pair from a bomb-rank group (≥3 of that rank in hand) is bomb-breaking:
+      // playing it destroys the 3-of-a-kind, same strategic cost as a bomb.
+      const bombRanksInHand = getBombRanks(player.hand);
+      const isBreakingBomb =
+        !isBombPlay &&
+        cheapest.length === 2 &&
+        bombRanksInHand.has(cheapest[0].rank);
 
       // --- P1: trying to exit — always play ---
       if (tryingToExit) {
@@ -1042,16 +1049,16 @@ function smartPlayDecision(
 
       // --- P5: medium threat — play non-bombs freely ---
       if (medThreat) {
-        if (!isBombPlay) return { action: 'play', cards: cheapest };
-        // Bomb on medium threat: only if hand is small (getting close to exit)
+        if (!isBombPlay && !isBreakingBomb) return { action: 'play', cards: cheapest };
+        // Bomb (or bomb-breaking pair) on medium threat: only if hand is small
         if (handSize <= 4) return { action: 'play', cards: cheapest };
         return { action: 'pass' };
       }
 
       // --- P6: CONSERVATION (no threat, opponent min hand > 3) ---
 
-      // Never bomb non-bomb plays when conserving
-      if (isBombPlay && round.lastPlay.format !== 'bomb') {
+      // Never bomb (or break a bomb) on non-bomb plays when conserving
+      if ((isBombPlay || isBreakingBomb) && round.lastPlay.format !== 'bomb') {
         return { action: 'pass' };
       }
 
