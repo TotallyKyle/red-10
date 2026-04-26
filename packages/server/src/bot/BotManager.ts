@@ -699,15 +699,10 @@ function decideChaGo(
       return 'decline';
     }
 
-    // LOW rank: skipping any opponent is worthwhile (cheap cha) — unless the
-    // trigger was a teammate, in which case the ≤2 critical check above is the
-    // only justification (already handled).
-    if (!triggerIsTeammate) {
-      const anyOpponentSkipped = skippedPlayers.some(p => p.team !== player.team);
-      if (anyOpponentSkipped) {
-        return 'cha';
-      }
-    }
+    // LOW rank: don't unconditionally cha just because an opponent is in the skip
+    // window. The go window is accessible to ALL players including those opponents'
+    // teammates — CHA on a low-rank opponent trigger has repeatedly given the
+    // opposing team free round wins via the go. Fall through to speculative section.
   }
 
   // No skip value. For high/med ranks, never cha speculatively.
