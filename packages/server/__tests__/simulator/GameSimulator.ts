@@ -2,7 +2,7 @@ import { GameEngine } from '../../src/game/GameEngine.js';
 import type { PlayerStrategy } from './strategies.js';
 import type { ActionLogEntry, InvariantViolation } from './invariants.js';
 import { checkInvariants } from './invariants.js';
-import type { Card, ActionType } from '@red10/shared';
+import type { Card, ActionType, GameResult } from '@red10/shared';
 import { classifyBomb, isBlackTen } from '@red10/shared';
 
 export interface SimulationConfig {
@@ -10,6 +10,14 @@ export interface SimulationConfig {
   strategies: PlayerStrategy[];
   seed?: number;
   verbose?: boolean;
+  /**
+   * Called after each completed game with the engine's GameResult (or null if
+   * the game failed). Lets a caller aggregate per-seat data (payouts, finish
+   * order) without forking the runner. The `engine` reference is the same one
+   * used to drive that game — useful for tools (e.g., DecisionRecorder) that
+   * key in-flight state by engine identity.
+   */
+  onGameComplete?: (gameIndex: number, result: GameResult | null, engine: GameEngine) => void;
 }
 
 export interface SimulationResult {
@@ -113,6 +121,8 @@ export class GameSimulator {
       result.stats.red10Wins += gameResult.stats.red10Wins;
       result.stats.black10Wins += gameResult.stats.black10Wins;
       result.stats.scoringTeamFailures += gameResult.stats.scoringTeamFailures;
+
+      this.config.onGameComplete?.(i, gameResult.gameResult, gameResult.engine);
     }
 
     if (result.gamesCompleted > 0) {
@@ -129,6 +139,8 @@ export class GameSimulator {
     error?: string;
     violations: InvariantViolation[];
     roundCount: number;
+    gameResult: GameResult | null;
+    engine: GameEngine;
     stats: {
       doublesOccurred: number;
       chaGosOccurred: number;
@@ -372,6 +384,8 @@ export class GameSimulator {
           completed: true,
           violations: allViolations,
           roundCount,
+          gameResult,
+          engine,
           stats,
         };
       }
@@ -383,6 +397,8 @@ export class GameSimulator {
           error: `Game exceeded max actions limit (${MAX_ACTIONS_PER_GAME})`,
           violations: allViolations,
           roundCount,
+          gameResult: null,
+          engine,
           stats,
         };
       }
@@ -393,6 +409,8 @@ export class GameSimulator {
         error: `Game ended in unexpected state: phase=${state.phase}`,
         violations: allViolations,
         roundCount,
+        gameResult: null,
+        engine,
         stats,
       };
     } catch (err) {
@@ -403,6 +421,8 @@ export class GameSimulator {
         error: `Exception: ${message}`,
         violations: allViolations,
         roundCount,
+        gameResult: null,
+        engine,
         stats,
       };
     }
