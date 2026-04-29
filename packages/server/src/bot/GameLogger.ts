@@ -144,6 +144,22 @@ export class GameLogger {
         ? `${state.round.chaGoState.phase} on ${state.round.chaGoState.triggerRank}s`
         : undefined,
     });
+
+    if (cards && cards.some(c => c.rank === '10' && c.isRed)) {
+      const player = state.players.find(p => p.id === actorId);
+      if (player) {
+        this.log.push({
+          timestamp: Date.now(),
+          roundNumber: this.roundNumber,
+          phase: 'playing',
+          actor: 'System',
+          actorTeam: '',
+          action: 'team_revealed',
+          detail: `Team revealed: ${actorName} is on Red10`,
+          handSizes: getHandSizes(engine),
+        });
+      }
+    }
   }
 
   logDoubling(engine: GameEngine, actorId: string, action: string, cards?: Card[]): void {

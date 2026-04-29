@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { ServerToClientEvents, ClientToServerEvents } from '@red10/shared';
+import type { ServerToClientEvents, ClientToServerEvents, Card } from '@red10/shared';
 import {
   createRoom,
   joinRoom,
@@ -76,6 +76,19 @@ function broadcastLogEntry(roomId: string, room: Room, logger: GameLogger) {
       io.to(p.socketId).emit('game:log_entry', entry);
     }
   }
+}
+
+/** Emit team:revealed if the played cards include a red 10. */
+function emitTeamRevealedIfNeeded(roomId: string, playerId: string, cards: Card[], engine: GameEngine): void {
+  const hasRedTen = cards.some(c => c.rank === '10' && c.isRed);
+  if (!hasRedTen) return;
+  const player = engine.getState().players.find(p => p.id === playerId);
+  if (!player) return;
+  io.to(roomId).emit('team:revealed', {
+    playerId,
+    team: player.team!,
+    red10Count: player.revealedRed10Count,
+  });
 }
 
 /** Set up turn timer for the current player. Clears any previous timer for this room. */
@@ -253,17 +266,7 @@ function executeBotAction(roomId: string, botId: string, engine: GameEngine, roo
       }
 
       // Check red 10s
-      const playedRed10s = action.cards.filter(c => c.rank === '10' && c.isRed);
-      if (playedRed10s.length > 0) {
-        const ps = st.players.find(p => p.id === botId);
-        if (ps) {
-          io.to(roomId).emit('team:revealed', {
-            playerId: botId,
-            team: ps.team!,
-            red10Count: ps.revealedRed10Count,
-          });
-        }
-      }
+      emitTeamRevealedIfNeeded(roomId, botId, action.cards, engine);
 
       // Player out
       const player = st.players.find(p => p.id === botId);
@@ -348,6 +351,8 @@ function executeBotAction(roomId: string, botId: string, engine: GameEngine, roo
         io.to(roomId).emit('cha_go:started', { rank: triggerRank as any, chaPlayerId: botId });
       }
 
+      emitTeamRevealedIfNeeded(roomId, botId, action.cards, engine);
+
       if (logger) {
         logger.logAction(engine, botId, 'cha', action.cards);
         broadcastLogEntry(roomId, room, logger);
@@ -360,6 +365,8 @@ function executeBotAction(roomId: string, botId: string, engine: GameEngine, roo
       if (!result.success) break;
 
       io.to(roomId).emit('cha_go:go_cha', { playerId: botId, cards: action.cards });
+
+      emitTeamRevealedIfNeeded(roomId, botId, action.cards, engine);
 
       if (logger) {
         logger.logAction(engine, botId, 'go_cha', action.cards);
@@ -384,6 +391,8 @@ function executeBotAction(roomId: string, botId: string, engine: GameEngine, roo
       if (!result.success) break;
 
       io.to(roomId).emit('bomb:defused', { defuserId: botId, cards: action.cards });
+
+      emitTeamRevealedIfNeeded(roomId, botId, action.cards, engine);
 
       if (logger) {
         logger.logAction(engine, botId, 'defuse', action.cards);
@@ -1021,17 +1030,7 @@ io.on('connection', (socket) => {
     }
 
     // Check if any played cards are red 10s — emit team:revealed
-    const playedRed10s = data.cards.filter((c: { rank: string; isRed: boolean }) => c.rank === '10' && c.isRed);
-    if (playedRed10s.length > 0) {
-      const playerState = state.players.find((p) => p.id === socket.id);
-      if (playerState) {
-        io.to(room.id).emit('team:revealed', {
-          playerId: socket.id,
-          team: playerState.team!,
-          red10Count: playerState.revealedRed10Count,
-        });
-      }
-    }
+    emitTeamRevealedIfNeeded(room.id, socket.id, data.cards, engine);
 
     // Check if the player went out
     const player = state.players.find((p) => p.id === socket.id);
@@ -1118,6 +1117,8 @@ io.on('connection', (socket) => {
       cards: data.cards,
     });
 
+    emitTeamRevealedIfNeeded(room.id, socket.id, data.cards, engine);
+
     const logger = gameLoggers.get(room.id);
     if (logger) {
       logger.logAction(engine, socket.id, 'defuse', data.cards);
@@ -1157,6 +1158,8 @@ io.on('connection', (socket) => {
       io.to(room.id).emit('cha_go:started', { rank: triggerRank as any, chaPlayerId: socket.id });
     }
 
+    emitTeamRevealedIfNeeded(room.id, socket.id, data.cards, engine);
+
     const logger = gameLoggers.get(room.id);
     if (logger) {
       logger.logAction(engine, socket.id, 'cha', data.cards);
@@ -1189,6 +1192,8 @@ io.on('connection', (socket) => {
     cb({ success: true });
 
     io.to(room.id).emit('cha_go:go_cha', { playerId: socket.id, cards: data.cards });
+
+    emitTeamRevealedIfNeeded(room.id, socket.id, data.cards, engine);
 
     const logger = gameLoggers.get(room.id);
     if (logger) {
