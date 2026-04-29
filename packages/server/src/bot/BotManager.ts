@@ -362,15 +362,16 @@ function chooseBestOpening(hand: Card[], opts: BotPlayOptions = {}): Card[] | nu
   // threshold of 6 can be restored via opts.disableBombPreservation for
   // legacy A/B testing.
   const loneFallbackMin = opts.disableBombPreservation ? 6 : 10;
+  const allowRedTenTwoOpen = hand.length <= 4;
   if (candidates.length > 0 && candidates.every(c => c.length === 1) && hand.length >= loneFallbackMin) {
-    candidates.push(...findBombs(hand));
+    candidates.push(...findBombs(hand).filter(b => allowRedTenTwoOpen || classifyBomb(b)?.type !== 'red10_2'));
   }
 
   // All-bomb-rank fallback: when all cards are bomb-rank (no safe opening exists), prefer
   // the weakest full bomb over a single card from a bomb group — a 3-card bomb
   // sheds more cards, wins the round more reliably, and breaks fewer distinct bombs.
   if (candidates.length === 0) {
-    const bombs = findBombs(hand);
+    const bombs = findBombs(hand).filter(b => allowRedTenTwoOpen || classifyBomb(b)?.type !== 'red10_2');
     if (bombs.length > 0) {
       candidates.push(...bombs);
     } else {
@@ -744,9 +745,14 @@ function decideChaGo(
   // If the trigger is a teammate (e.g., they just played the go-single), cha-ing
   // over them steals their trick — always decline in that case.
   if (!triggerIsTeammate) {
-    // Hand-shaping: if we hold a 5+ card straight that the cha pair won't break,
-    // cha to thin the hand toward that exit straight even without an opponent skip.
-    {
+    // Hand-shaping: if we hold a 5+ card straight that the cha pair won't break
+    // AND we're already near-exit, cha to thin the hand toward that straight.
+    // The hand-size gate matters: at 13 cards a 5-card straight doesn't make
+    // exit imminent (still 6 cards after cha+straight). DMQS R2 had Eve cha
+    // with 13 cards on opponent trigger and lose her pair to a counter-go;
+    // requiring hand ≤ 9 means this path only fires when cha+straight brings
+    // the bot to ≤ 2 cards (one play from exit).
+    if (player.hand.length <= 9) {
       const chaCardIds = new Set(matchingCards.slice(0, 2).map(c => c.id));
       const hasIntactExitStraight = findValidStraights(player.hand, null).some(
         s => s.length >= 5 && !s.some(c => chaCardIds.has(c.id)),
@@ -754,14 +760,16 @@ function decideChaGo(
       if (hasIntactExitStraight) return 'cha';
     }
 
-    // LOW rank speculative chas: if remaining copies are low (1-2), cha is decent but risky
-    if (afterChaRemaining <= 2) {
+    // LOW rank speculative chas: only cha when remaining copies are ≤ 1 (high
+    // chance no opponent has the rank and the cha wins), or exactly 2 with a
+    // strong bias to decline. With 3+ copies remaining in others' hands, an
+    // opponent likely has it and will win the go-single — burning our cha pair
+    // for nothing. The previous "hand ≥ 8 → 30% cha" path was a hand-thinning
+    // hedge, but in practice it caused exactly this loss pattern (DMQS R2).
+    if (afterChaRemaining === 1) {
       return Math.random() < 0.6 ? 'cha' : 'decline';
     }
-
-    // Many copies remaining — chaing just gives someone else position
-    // Only cha if we have a large hand (might as well thin it)
-    if (player.hand.length >= 8) {
+    if (afterChaRemaining === 2) {
       return Math.random() < 0.3 ? 'cha' : 'decline';
     }
   }
@@ -1040,6 +1048,19 @@ function smartPlayDecision(
           if (canBeat(cards.slice(0, 3), round.lastPlay)) bp.push(cards.slice(0, 3));
         }
       }
+    }
+
+    // Red10×2 is uniquely costly to play: ~20% defuse risk (opponent's black-10
+    // pair neutralizes it), immediate team reveal of both red 10s (giving
+    // opponents perfect info), and loss of the team's strongest interrupt
+    // resource. Only spend it at near-exit hand sizes where the round-win value
+    // is real (handSize ≤ 4 means playing this 2-card bomb reduces hand to ≤ 2,
+    // putting the player one play from exit).
+    if (handSize > 4) {
+      bp = bp.filter(p => {
+        const bomb = classifyBomb(p);
+        return bomb?.type !== 'red10_2';
+      });
     }
 
     if (bp.length > 0) {
