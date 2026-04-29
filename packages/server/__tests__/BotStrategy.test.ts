@@ -940,19 +940,24 @@ describe('BotManager — chooseBestOpening: all-bomb-rank fallback', () => {
     }
   });
 
-  it('opens with bomb (not lone single) when large hand is mostly bombs', () => {
-    // EYJG 21:05 pattern: Bot Eve had 7 cards — one non-bomb single (5) and
-    // two bombs (6×3 and 3×3). Old behaviour: picks 5 single (only non-bomb candidate).
-    // New behaviour: adds bombs to candidates → picks 3×3 (score 39) over 5 single (32).
+  it('opens with the lone non-bomb single (preserves bombs) for a 7-card mostly-bomb hand', () => {
+    // EYJG 21:05 pattern revisited: 7 cards — one non-bomb single (5) and
+    // two bombs (6×3 and 3×3). Earlier design (commit 59f8f8c) added bombs
+    // to candidates whenever only single candidates remained at hand ≥ 6, so
+    // the bot would pick a 3×3 bomb over the lone 5. Game-review feedback
+    // (FSYS R11) showed the bomb-resource cost outweighs the round-win value
+    // here — leading the lone low orphan and preserving the bomb for later
+    // defensive/exit use is strictly better at 6-9 card hands. For very stuck
+    // 10+ card hands, the bomb-as-opener fallback still applies (next test).
     const hands: Card[][] = [
       [
         card('5', 'hearts2', true,  'p0-5h2'),   // lone non-bomb single
-        card('6', 'clubs2',  false, 'p0-6c2'),   // bomb rank
-        card('6', 'hearts',  true,  'p0-6h'),    // bomb rank
-        card('6', 'hearts2', true,  'p0-6h2'),   // bomb rank (6×3)
-        card('3', 'clubs',   false, 'p0-3c'),    // bomb rank
-        card('3', 'hearts',  true,  'p0-3h'),    // bomb rank
-        card('3', 'spades',  false, 'p0-3s'),    // bomb rank (3×3)
+        card('6', 'clubs2',  false, 'p0-6c2'),
+        card('6', 'hearts',  true,  'p0-6h'),
+        card('6', 'hearts2', true,  'p0-6h2'),   // 6×3 bomb
+        card('3', 'clubs',   false, 'p0-3c'),
+        card('3', 'hearts',  true,  'p0-3h'),
+        card('3', 'spades',  false, 'p0-3s'),    // 3×3 bomb
       ],
       [card('3','clubs',false), card('5','clubs',false), card('6','clubs',false),
        card('7','clubs',false), card('8','clubs',false), card('9','clubs',false), card('10','clubs',false)],
@@ -974,10 +979,49 @@ describe('BotManager — chooseBestOpening: all-bomb-rank fallback', () => {
     const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
     expect(decision.action).toBe('play');
     if (decision.action === 'play') {
-      // Should play a 3-card bomb, not the lone single
+      // Lead the lone 5 — preserve both bombs.
+      expect(decision.cards).toHaveLength(1);
+      expect(decision.cards[0].rank).toBe('5');
+    }
+  });
+
+  it('falls back to bomb for a stuck 10+ card hand where every non-bomb option is a single', () => {
+    // Preserves the original lone-single-fallback behavior for the harder case:
+    // 10+ cards where every non-bomb candidate is an isolated single. The
+    // alternative — many rounds of passing — is worse than spending one bomb
+    // to win a round and shed 3 cards. Threshold raised to ≥ 10 to limit
+    // this fallback to genuinely stuck hands.
+    const hands: Card[][] = [
+      [
+        card('3', 'clubs',   false, 'p0-3c'),
+        card('3', 'hearts',  true,  'p0-3h'),
+        card('3', 'spades',  false, 'p0-3s'),    // 3×3
+        card('6', 'clubs2',  false, 'p0-6c2'),
+        card('6', 'hearts',  true,  'p0-6h'),
+        card('6', 'hearts2', true,  'p0-6h2'),   // 6×3
+        card('9', 'clubs',   false, 'p0-9c'),
+        card('9', 'hearts',  true,  'p0-9h'),
+        card('9', 'spades',  false, 'p0-9s'),    // 9×3
+        card('5', 'hearts2', true,  'p0-5h2'),   // lone non-bomb single
+      ],
+      [card('3','clubs',false), card('5','clubs',false), card('6','clubs',false), card('7','clubs',false)],
+      [card('3','hearts',true), card('5','hearts',true), card('6','hearts',true), card('7','hearts',true)],
+      [card('3','spades',false), card('5','spades',false), card('6','spades',false), card('7','spades',false)],
+      [card('3','diamonds',true), card('5','diamonds',true), card('6','diamonds',true), card('7','diamonds',true)],
+      [card('4','clubs',false), card('5','clubs2',false), card('6','clubs2',false), card('7','clubs2',false)],
+    ];
+    const teams: ('red10' | 'black10')[] = ['black10','red10','black10','red10','black10','red10'];
+    const engine = setupEngine(hands, teams, 'p0');
+    const state = engine.getState();
+    state.round!.currentFormat = null;
+    state.round!.leaderId = 'p0';
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    if (decision.action === 'play') {
       expect(decision.cards.length).toBeGreaterThanOrEqual(3);
-      // Should be one of the bombs (rank 3 or rank 6), not the 5
-      expect(decision.cards.every(c => c.rank === '3' || c.rank === '6')).toBe(true);
+      // Should be a bomb (rank 3, 6, or 9), not the lone 5.
+      expect(decision.cards.every(c => c.rank === '3' || c.rank === '6' || c.rank === '9')).toBe(true);
     }
   });
 });

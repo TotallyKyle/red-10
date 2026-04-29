@@ -339,10 +339,12 @@ function chooseBestOpening(hand: Card[]): Card[] | null {
     if (fmt) candidates.push([...hand]);
   }
 
-  // Lone-single fallback: if only single-card candidates remain and the hand is
-  // large (≥6 cards), add bombs so scoreOpening can pick one — a 3-card bomb
-  // opener sheds more cards and wins the round uncontested by singles.
-  if (candidates.length > 0 && candidates.every(c => c.length === 1) && hand.length >= 6) {
+  // Lone-single fallback: if only single-card candidates remain and the hand
+  // is very large (≥10 cards) — bomb-as-opener is rarely worth the lost
+  // resource; only use this fallback when truly stuck with no multi-card
+  // non-bomb plays. For 6-9 card hands, prefer leading a low orphan single
+  // and preserving the bomb for later defensive/exit use.
+  if (candidates.length > 0 && candidates.every(c => c.length === 1) && hand.length >= 10) {
     candidates.push(...findBombs(hand));
   }
 
@@ -499,11 +501,22 @@ function standardDoublingDecision(
   const aces = groups.get('A');
   const hasSpecialBomb = !!(fours && fours.length >= 2 && aces && aces.length >= 1);
 
-  // Hard gates: never double without one of these structural features.
-  const hasStrongStructure =
-    distinctBombRanks >= 2 ||
-    (distinctBombRanks >= 1 && groups.size <= 4) ||
-    hasSpecialBomb;
+  // 2v4 detection: if this player holds 2 red 10s, the team must be 2v4
+  // (only 1 other red 10 exists, held by exactly 1 other player). 2v4 is a
+  // significant structural disadvantage — require much stronger hand
+  // before doubling.
+  const redTensHeld = player.hand.filter(c => c.rank === '10' && c.isRed).length;
+  const isKnown2v4 = redTensHeld === 2;
+
+  // +1 is the meaningful delta here: evaluateHandStrength caps at 10, so threshold+2
+  // would be unreachable for any hand. +1 ensures a 2v4 player needs top-tier
+  // strength (2 bombs + density) rather than merely borderline (1 bomb + density).
+  const effectiveThreshold = isKnown2v4 ? strengthThreshold + 1 : strengthThreshold;
+  const hasStrongStructure = isKnown2v4
+    ? distinctBombRanks >= 2
+    : distinctBombRanks >= 2 ||
+      (distinctBombRanks >= 1 && groups.size <= 4) ||
+      hasSpecialBomb;
 
   // Non-red10 players need a bomb to REVEAL when doubling/quadrupling.
   // Find the primary bomb to reveal (largest group).
@@ -518,7 +531,7 @@ function standardDoublingDecision(
   if (validActions.includes('quadruple')) {
     // Quadruple bar: need real power — two bombs OR a bomb + density.
     const strongEnoughToQuad =
-      strength >= strengthThreshold + 2 &&
+      strength >= effectiveThreshold + 2 &&
       (distinctBombRanks >= 2 || hasSpecialBomb);
     if (strongEnoughToQuad) {
       if (player.team === 'red10') return { action: 'quadruple' };
@@ -528,7 +541,7 @@ function standardDoublingDecision(
   }
 
   if (validActions.includes('double')) {
-    if (strength >= strengthThreshold && hasStrongStructure) {
+    if (strength >= effectiveThreshold && hasStrongStructure) {
       if (player.team === 'red10') return { action: 'double' };
       if (bombsToReveal.length > 0) return { action: 'double', bombCards: bombsToReveal[0] };
     }
@@ -1060,6 +1073,18 @@ function smartPlayDecision(
 
       // --- P3: blocking dangerous opponents ---
       if (highThreat || isLastPlayerDangerous) {
+        // Don't burn a bomb on a single lead unless we're forced. Singles chains
+        // have natural counters (2-singles), and bombing a single often gets
+        // counter-bombed. Two carve-outs: trying to exit (bomb might force exit)
+        // or must-block an opponent at ≤ 1 card.
+        if (
+          isBombPlay &&
+          round.lastPlay.format === 'single' &&
+          !tryingToExit &&
+          opponentMinHand > 1
+        ) {
+          return { action: 'pass' };
+        }
         // Conservative bomb use: avoid burning a triple against a non-bomb if a
         // large-hand opponent (8+ cards) is still active — they likely have a
         // bigger bomb and will outbid, making our burn wasteful.
