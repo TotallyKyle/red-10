@@ -21,6 +21,21 @@ export interface PlayerStrategy {
     | { action: 'defuse'; cards: Card[] };
 }
 
+/**
+ * Behavior toggles for sim/A-B purposes. Default behavior (all flags
+ * undefined/false) is the SHIPPING behavior. Each flag DISABLES one of the
+ * recent strategy fixes so a legacy variant can be reconstructed for
+ * head-to-head comparison. Production strategies should not pass any of these.
+ */
+export interface BotPlayOptions {
+  /** If true, restore the pre-fix bomb-as-opener fallback at hand ≥ 6 (instead of ≥ 10). */
+  disableBombPreservation?: boolean;
+  /** If true, skip the 2v4 doubling penalty when player holds 2 red 10s. */
+  disable2v4DoublingPenalty?: boolean;
+  /** If true, allow P3 to bomb single leads even when not near-exit / must-block. */
+  disableSingleBombGuard?: boolean;
+}
+
 // ---- Inline strategies (simplified versions of simulator strategies) ----
 // We inline them to avoid importing from __tests__ in production code.
 
@@ -304,7 +319,7 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
 /**
  * Choose the best opening play from all possible options.
  */
-function chooseBestOpening(hand: Card[]): Card[] | null {
+function chooseBestOpening(hand: Card[], opts: BotPlayOptions = {}): Card[] | null {
   const candidates: Card[][] = [];
   const bombRanks = getBombRanks(hand);
 
@@ -343,8 +358,11 @@ function chooseBestOpening(hand: Card[]): Card[] | null {
   // is very large (≥10 cards) — bomb-as-opener is rarely worth the lost
   // resource; only use this fallback when truly stuck with no multi-card
   // non-bomb plays. For 6-9 card hands, prefer leading a low orphan single
-  // and preserving the bomb for later defensive/exit use.
-  if (candidates.length > 0 && candidates.every(c => c.length === 1) && hand.length >= 10) {
+  // and preserving the bomb for later defensive/exit use. The pre-fix
+  // threshold of 6 can be restored via opts.disableBombPreservation for
+  // legacy A/B testing.
+  const loneFallbackMin = opts.disableBombPreservation ? 6 : 10;
+  if (candidates.length > 0 && candidates.every(c => c.length === 1) && hand.length >= loneFallbackMin) {
     candidates.push(...findBombs(hand));
   }
 
@@ -487,6 +505,7 @@ function standardDoublingDecision(
   engine: GameEngine,
   playerId: string,
   strengthThreshold: number,
+  opts: BotPlayOptions = {},
 ): ReturnType<PlayerStrategy['decideDoubling']> {
   const state = engine.getState();
   const player = state.players.find(p => p.id === playerId)!;
@@ -503,10 +522,10 @@ function standardDoublingDecision(
 
   // 2v4 detection: if this player holds 2 red 10s, the team must be 2v4
   // (only 1 other red 10 exists, held by exactly 1 other player). 2v4 is a
-  // significant structural disadvantage — require much stronger hand
-  // before doubling.
+  // significant structural disadvantage — require much stronger hand before
+  // doubling. Can be disabled for legacy A/B via opts.disable2v4DoublingPenalty.
   const redTensHeld = player.hand.filter(c => c.rank === '10' && c.isRed).length;
-  const isKnown2v4 = redTensHeld === 2;
+  const isKnown2v4 = redTensHeld === 2 && !opts.disable2v4DoublingPenalty;
 
   // +1 is the meaningful delta here: evaluateHandStrength caps at 10, so threshold+2
   // would be unreachable for any hand. +1 ensures a 2v4 player needs top-tier
@@ -769,6 +788,7 @@ function decideChaGo(
 function smartPlayDecision(
   engine: GameEngine,
   playerId: string,
+  opts: BotPlayOptions = {},
 ): ReturnType<PlayerStrategy['decidePlay']> {
   const state = engine.getState();
   const validActions = engine.getValidActions(playerId);
@@ -983,7 +1003,7 @@ function smartPlayDecision(
     }
 
     // (e) Default: use the scoring system to pick the best opening
-    const bestOpening = chooseBestOpening(player.hand);
+    const bestOpening = chooseBestOpening(player.hand, opts);
     if (bestOpening) return { action: 'play', cards: bestOpening };
     return { action: 'play', cards: [player.hand[0]] };
   }
@@ -1076,8 +1096,10 @@ function smartPlayDecision(
         // Don't burn a bomb on a single lead unless we're forced. Singles chains
         // have natural counters (2-singles), and bombing a single often gets
         // counter-bombed. Two carve-outs: trying to exit (bomb might force exit)
-        // or must-block an opponent at ≤ 1 card.
+        // or must-block an opponent at ≤ 1 card. Can be disabled via
+        // opts.disableSingleBombGuard for legacy A/B testing.
         if (
+          !opts.disableSingleBombGuard &&
           isBombPlay &&
           round.lastPlay.format === 'single' &&
           !tryingToExit &&
@@ -1212,6 +1234,28 @@ export const TeamCoordinatorStrategy: PlayerStrategy = {
   },
   decidePlay(engine, playerId) {
     return smartPlayDecision(engine, playerId);
+  },
+};
+
+/**
+ * Legacy variant for A/B testing only — disables all three strategy fixes
+ * shipped on 2026-04-29 (FSYS bomb preservation, 2v4 doubling penalty,
+ * single-bomb guard). Behaves like SmartRacerStrategy did before commit
+ * 941844f. NOT in ALL_STRATEGIES — intentionally opt-in.
+ */
+export const LegacyPreFixesStrategy: PlayerStrategy = {
+  name: 'LegacyPreFixes',
+  decideDoubling(engine, playerId) {
+    return standardDoublingDecision(engine, playerId, 9, {
+      disable2v4DoublingPenalty: true,
+    });
+  },
+  decidePlay(engine, playerId) {
+    return smartPlayDecision(engine, playerId, {
+      disableBombPreservation: true,
+      disable2v4DoublingPenalty: true,
+      disableSingleBombGuard: true,
+    });
   },
 };
 
