@@ -174,7 +174,12 @@ You are reviewing red-10 games. Every hour, do this:
         starting-hand JSON tells you exactly what each human held, so
         you can reason about whether a pass was correct or a fake-out.
         Surface strategy ideas the bots should adopt.
-   d. Write a markdown report to reviews/<same-basename>.md with:
+   d. **Before flagging anomalies, consult the "Domain rules" section
+      below.** Several outputs that look anomalous on the surface are
+      actually rules-correct. Anomalies should describe what was
+      observed, not assume a cause. Phrase as "X observed; expected Y
+      because Z" rather than "X is a bug".
+   e. Write a markdown report to reviews/<same-basename>.md with:
         ## Summary (game environment, teams, final result, review mode)
         ## Bot mistakes (bot-grading mode only)
         ## Human patterns worth copying (human-learning mode only)
@@ -188,6 +193,64 @@ You are reviewing red-10 games. Every hour, do this:
 
 Never edit BotManager.ts. Never open PRs on the main repo. Your only
 writes are to TotallyKyle/red-10-logs under reviews/.
+
+---
+
+## Domain rules (consult before flagging anomalies)
+
+These are NOT bugs even though they look surprising. Don't surface them
+in the Anomalies section.
+
+### Scoring & "trapped" count
+
+- The "scoring team" is the team of the FIRST player to go out. They
+  are the BETTING team — implicitly wagering they'll all finish before
+  any opposing member.
+- "Scoring team WINS" iff all its members finish before the opposing
+  team's last finisher. Otherwise "Scoring team LOSES".
+- **When the scoring team LOSES, no money changes hands.** `Trapped: 0`
+  with all `payouts: 0` is the rules-correct output. The opposing team
+  did not "win" in a payout sense — they just defended successfully.
+- The GameLogger writes `"GAME OVER - {scoringTeamName} LOSES! Trapped: 0"`
+  in this case. This is correct, not a bug. Don't write the review as
+  "X wins but Trapped: 0 is suspicious" — instead note "scoring team
+  Y failed; no payouts per rules."
+- "Scoring team" ≠ "winning team". The losing scoring team's first
+  player still went out before anyone else; they just didn't get all
+  members out in time.
+
+### Red 10 reveals during gameplay
+
+- Playing a red 10 reveals the player's team. The GameLogger annotates
+  this with a `[System] Team revealed:` line **only in logs generated
+  AFTER 2026-04-28**. Older logs may show red 10s played without a
+  reveal annotation — that's a logging-format gap in older versions,
+  not a missing engine event. Don't flag absent annotations on logs
+  predating the fix.
+
+### Team size distribution
+
+- Red 10 has 3 red 10s distributed among 6 players. The team-size
+  distribution is **probabilistic**, not balanced:
+    - 3v3 ≈ 57.75% of deals
+    - 2v4 ≈ 40% of deals
+    - 1v5 ≈ 2.26% of deals
+- Seeing a 2v4 split is normal (it happens about 4 times in every 10
+  games). Don't flag 2v4 itself as an anomaly. You CAN flag bot
+  strategy mistakes that arise from a 2v4 (e.g., doubling without
+  factoring team size).
+
+### Leadership inheritance after mid-round exit
+
+- When a player plays their last card mid-round and the round
+  subsequently completes (everyone passes), the engine attributes the
+  round-win to whoever's responsible per the rules. The exiting player
+  doesn't always "win the round" — that's by design.
+
+When unsure whether a behavior is a bug or by-design, **describe what
+you observed and ask the question** rather than asserting it's broken.
+Kyle would rather see "is X by design?" than "X is broken" when X is
+actually correct.
 ```
 
 **Routine setup checklist for Kyle:**
