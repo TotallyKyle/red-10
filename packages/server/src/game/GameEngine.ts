@@ -1522,6 +1522,11 @@ export class GameEngine {
     // Sort players by seatIndex to assign hands in seat order
     const sortedPlayers = [...this.state.players].sort((a, b) => a.seatIndex - b.seatIndex);
 
+    // Capture fresh starting hands for the new game. Without this, the JSON
+    // sidecar pushed at game-end shows stale hands from the FIRST game played
+    // in this engine instance — observed in 7 of 30 game reviews ("TEPY room").
+    this.startingHands.clear();
+
     for (let i = 0; i < sortedPlayers.length; i++) {
       const player = this.state.players.find((p) => p.id === sortedPlayers[i].id)!;
       player.hand = hands[i];
@@ -1533,6 +1538,8 @@ export class GameEngine {
       // Reassign teams based on new red 10 ownership
       const hasRed10 = player.hand.some((c) => c.rank === '10' && c.isRed);
       player.team = hasRed10 ? 'red10' : 'black10';
+
+      this.startingHands.set(player.id, hands[i].map((c) => ({ ...c })));
     }
 
     // Reset game-level state
