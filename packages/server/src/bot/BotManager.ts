@@ -37,12 +37,16 @@ export interface BotPlayOptions {
   /** If true, P3 fires whenever opponentMinHand ≤ 2 regardless of whether the
    * dangerous opponent has already passed this round (pre-Fix-C behavior). */
   disableMustBlockPassedCheck?: boolean;
+  /** If true, skip defensive-mode logic — bot always races aggressively even
+   * when its hand is too weak to win the race (pre-Fix-D behavior). */
+  disableDefensiveMode?: boolean;
 }
 
 // ---- Inline strategies (simplified versions of simulator strategies) ----
 // We inline them to avoid importing from __tests__ in production code.
 
 import { detectFormat, canBeat, classifyBomb, isBlackTen, RANK_ORDER } from '@red10/shared';
+import { assessRaceMode } from './raceAssessment.js';
 
 function rankValue(rank: string): number {
   return RANK_ORDER[rank];
@@ -919,6 +923,16 @@ function smartPlayDecision(
     return lp && !lp.isOut && lp.team !== player.team && lp.handSize <= 3;
   })();
 
+  // Race-posture assessment (Fix D). When my hand is too weak to actually win
+  // the race (low cards, few winners, opponent close to exit), defensive mode
+  // tells the bot: don't burn winners trying to block — pass and conserve.
+  // The activeOpponents <=1 case in assessRaceMode flips back to aggressive
+  // so we still race the last opponent. Can be disabled for legacy A/B.
+  const raceMode = opts.disableDefensiveMode
+    ? 'aggressive'
+    : assessRaceMode(player.hand, player, state.players).mode;
+  const isDefensive = raceMode === 'defensive';
+
   // ============================================================
   // P1: SELF EXIT — if we have 1-2 cards, always try to get out
   // This overrides ALL conservation and teammate logic.
@@ -1015,7 +1029,9 @@ function smartPlayDecision(
     //     almost certainly have something that beats a low card and they exit.
     //     Leading high forces them to either have an even higher card (less
     //     likely) or pass.
-    if (opponentMinHand <= 1) {
+    //     Skipped in defensive mode: we don't mind the opp exiting (they're
+    //     out of our race), and burning a high single just to block is wasteful.
+    if (opponentMinHand <= 1 && !isDefensive) {
       const pairs = findValidPairs(player.hand, null, true);
       if (pairs.length > 0) return { action: 'play', cards: sortByLowestRank(pairs)[0] };
       const straights = findValidStraights(player.hand, null);
@@ -1031,7 +1047,8 @@ function smartPlayDecision(
     }
 
     // (d) Opponent has 2 cards — straights block them, or lead a high single.
-    if (opponentMinHand <= 2) {
+    //     Skipped in defensive mode for the same reason as (c).
+    if (opponentMinHand <= 2 && !isDefensive) {
       const straights = findValidStraights(player.hand, null);
       if (straights.length > 0) return { action: 'play', cards: straights[0] };
       const ps = findValidPairedStraights(player.hand, null);
@@ -1152,6 +1169,18 @@ function smartPlayDecision(
           return handSize - play.length <= 2 && (!isBomb || handSize <= 5);
         });
         if (nearExitPlay) return { action: 'play', cards: nearExitPlay };
+      }
+
+      // --- Defensive mode: don't burn winners when we can't win the race ---
+      // If the cheapest beating play uses a "winner" (bomb, A-pair, or
+      // anything with min rank ≥ A), pass and conserve. Carve-outs:
+      //   - tryingToExit (P1) already returned above, so we're not blocking exit.
+      //   - isLastPlayByTeammate already returned pass above, so not affected.
+      //   - Near-exit (≤7 cards with multi-card play to ≤2) also returned above.
+      // The defensive-mode trigger requires my hand ≥ 6, so this only fires
+      // mid-game.
+      if (isDefensive && (isBombPlay || playMinRank >= 11)) {
+        return { action: 'pass' };
       }
 
       // --- P3: blocking dangerous opponents ---
@@ -1315,11 +1344,29 @@ export const TeamCoordinatorStrategy: PlayerStrategy = {
 };
 
 /**
- * Legacy variant for A/B testing only — disables all four strategy fixes
- * shipped 2026-04-29 / 2026-04-30 (FSYS bomb preservation, 2v4 doubling
- * penalty, single-bomb guard, must-block-passed check). Behaves like
- * SmartRacerStrategy did before those commits. NOT in ALL_STRATEGIES —
- * intentionally opt-in.
+ * Pre-Fix-D variant for A/B testing — disables only defensive mode while
+ * keeping all the earlier fixes (FSYS, 2v4, single-bomb, must-block-passed).
+ * Used to isolate Fix D's effect on scoring failure rate and payout magnitude.
+ * NOT in ALL_STRATEGIES — opt-in only.
+ */
+export const PreFixDStrategy: PlayerStrategy = {
+  name: 'PreFixD',
+  decideDoubling(engine, playerId) {
+    return standardDoublingDecision(engine, playerId, 9);
+  },
+  decidePlay(engine, playerId) {
+    return smartPlayDecision(engine, playerId, {
+      disableDefensiveMode: true,
+    });
+  },
+};
+
+/**
+ * Legacy variant for A/B testing only — disables all five strategy fixes
+ * shipped 2026-04-29 / 2026-04-30 / 2026-05 (FSYS bomb preservation, 2v4
+ * doubling penalty, single-bomb guard, must-block-passed check, defensive
+ * mode). Behaves like SmartRacerStrategy did before those commits. NOT in
+ * ALL_STRATEGIES — intentionally opt-in.
  */
 export const LegacyPreFixesStrategy: PlayerStrategy = {
   name: 'LegacyPreFixes',
@@ -1334,6 +1381,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
       disable2v4DoublingPenalty: true,
       disableSingleBombGuard: true,
       disableMustBlockPassedCheck: true,
+      disableDefensiveMode: true,
     });
   },
 };
