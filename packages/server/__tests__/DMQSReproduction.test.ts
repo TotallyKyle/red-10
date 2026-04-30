@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { GameEngine } from '../src/game/GameEngine.js';
 import { SmartRacerStrategy } from '../src/bot/BotManager.js';
 import type { Card } from '@red10/shared';
@@ -105,7 +105,16 @@ describe('DMQS R5 — Red10×2 reluctance at hand size 7', () => {
 // ---- Test 2: DMQS R2 — Eve does NOT cha with 3-3 pair when 3 copies remain ----
 
 describe('DMQS R2 — speculative cha declined when 3+ copies remain', () => {
+  // estimatePlayedCopies has a 40% chance to miscount by ±1 to simulate
+  // human card-counting noise. Without stubbing, that turns this assertion
+  // into a ~6% flake (miscount → afterChaRemaining=2 → 30% cha branch fires).
+  // The test is verifying Fix B's hand-shaping gate, not the speculative
+  // copy-count path, so pin Math.random to keep the count exact.
+  const realRandom = Math.random;
+  afterEach(() => { Math.random = realRandom; });
+
   it('Eve (p5) declines cha with 3♣3♣ when afterChaRemaining=3 (deterministic with Fix B)', () => {
+    Math.random = () => 0.99; // > 0.4 → no miscount in estimatePlayedCopies
     // Reproduction of DMQS R2: Kyle (p4) plays 3♦ single. Eve (p5) holds
     // 3♣3♣ (the pair). Known copies: Kyle's 3♦ (played) + Eve's 3♣3♣ (hand)
     // = 3 of 6. estimatePlayedCopies sums played-this-round (1) + in-hand (2)
