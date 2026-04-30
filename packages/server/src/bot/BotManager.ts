@@ -34,6 +34,9 @@ export interface BotPlayOptions {
   disable2v4DoublingPenalty?: boolean;
   /** If true, allow P3 to bomb single leads even when not near-exit / must-block. */
   disableSingleBombGuard?: boolean;
+  /** If true, P3 fires whenever opponentMinHand ≤ 2 regardless of whether the
+   * dangerous opponent has already passed this round (pre-Fix-C behavior). */
+  disableMustBlockPassedCheck?: boolean;
 }
 
 // ---- Inline strategies (simplified versions of simulator strategies) ----
@@ -252,6 +255,45 @@ function findOrphanCards(hand: Card[]): Set<string> {
   }
 
   return new Set(hand.filter(c => !usedInMulti.has(c.id)).map(c => c.id));
+}
+
+/**
+ * Has `playerId` passed in the current round, since the most recent play?
+ *
+ * In Red 10, once a player passes in a round they cannot rejoin it. Between
+ * the most recent player-to-play (`round.lastPlay.playerId`) and the next
+ * player to act (`round.currentPlayerId`), every player in clockwise order
+ * has passed in the current cycle (the engine moves currentPlayerId past
+ * passers automatically). This helper checks if `playerId` is in that range.
+ *
+ * Returns false if no play has been made yet (round just started — nobody has
+ * passed yet) or if `playerId` was the most recent player or is the current
+ * player.
+ */
+function hasPassedThisRound(
+  playerId: string,
+  round: RoundInfo | null,
+  players: { id: string; seatIndex: number }[],
+): boolean {
+  if (!round?.lastPlay) return false;
+  const lastPlayerId = round.lastPlay.playerId;
+  const currentPlayerId = round.currentPlayerId;
+  if (playerId === lastPlayerId) return false;
+  if (playerId === currentPlayerId) return false;
+
+  const lastSeat = players.find(p => p.id === lastPlayerId)?.seatIndex;
+  const currentSeat = players.find(p => p.id === currentPlayerId)?.seatIndex;
+  const playerSeat = players.find(p => p.id === playerId)?.seatIndex;
+  if (lastSeat === undefined || currentSeat === undefined || playerSeat === undefined) return false;
+
+  // Walk clockwise from lastSeat+1 up to (but not including) currentSeat.
+  // Any seat in that range has been passed-through in the current cycle.
+  let seat = (lastSeat + 1) % 6;
+  while (seat !== currentSeat) {
+    if (seat === playerSeat) return true;
+    seat = (seat + 1) % 6;
+  }
+  return false;
 }
 
 /**
@@ -1113,7 +1155,21 @@ function smartPlayDecision(
       }
 
       // --- P3: blocking dangerous opponents ---
-      if (highThreat || isLastPlayerDangerous) {
+      // Must-block reasoning only applies if the dangerous opponent(s) can still
+      // play THIS round. Once they've passed, the round will resolve without
+      // their further input, so escalating is just burning resources.
+      const dangerousOpps = opponents.filter(o => o.handSize <= 2);
+      const allDangerousOppsPassed =
+        !opts.disableMustBlockPassedCheck &&
+        dangerousOpps.length > 0 &&
+        dangerousOpps.every(o => hasPassedThisRound(o.id, round, state.players));
+
+      // Even if all ≤2-card opponents have passed, isLastPlayerDangerous still
+      // wants us to win this round so we lead next round (preventing the
+      // dangerous last player from leading with their small hand).
+      const effectivelyHighThreat = (highThreat && !allDangerousOppsPassed) || isLastPlayerDangerous;
+
+      if (effectivelyHighThreat) {
         // Don't burn a bomb on a single lead unless we're forced. Singles chains
         // have natural counters (2-singles), and bombing a single often gets
         // counter-bombed. Two carve-outs: trying to exit (bomb might force exit)
@@ -1259,10 +1315,11 @@ export const TeamCoordinatorStrategy: PlayerStrategy = {
 };
 
 /**
- * Legacy variant for A/B testing only — disables all three strategy fixes
- * shipped on 2026-04-29 (FSYS bomb preservation, 2v4 doubling penalty,
- * single-bomb guard). Behaves like SmartRacerStrategy did before commit
- * 941844f. NOT in ALL_STRATEGIES — intentionally opt-in.
+ * Legacy variant for A/B testing only — disables all four strategy fixes
+ * shipped 2026-04-29 / 2026-04-30 (FSYS bomb preservation, 2v4 doubling
+ * penalty, single-bomb guard, must-block-passed check). Behaves like
+ * SmartRacerStrategy did before those commits. NOT in ALL_STRATEGIES —
+ * intentionally opt-in.
  */
 export const LegacyPreFixesStrategy: PlayerStrategy = {
   name: 'LegacyPreFixes',
@@ -1276,6 +1333,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
       disableBombPreservation: true,
       disable2v4DoublingPenalty: true,
       disableSingleBombGuard: true,
+      disableMustBlockPassedCheck: true,
     });
   },
 };
