@@ -612,3 +612,102 @@ describe('Fix 5 — isRed tiebreak (avoid gratuitous red-10 reveals)', () => {
     }
   });
 });
+
+// ---- Verification: bomb-preserving-straight filter on chooseBestOpening ----
+
+/**
+ * Build an engine with `leaderId` as the leader of a fresh round (no plays yet).
+ * Used to test opening-only decisions without simulating a prior round.
+ */
+function setupOpeningEngine(
+  hands: Card[][],
+  teams: ('red10' | 'black10')[],
+  leaderId: string,
+): GameEngine {
+  const engine = new GameEngine('strategy-fixes-test', makePlayers());
+  engine.startGame();
+
+  const state = engine.getState();
+  for (let i = 0; i < 6; i++) {
+    state.players[i].hand = hands[i];
+    state.players[i].handSize = hands[i].length;
+    state.players[i].team = teams[i];
+  }
+  state.phase = 'playing';
+  state.doubling = null;
+  engine.startNewRound(leaderId);
+
+  return engine;
+}
+
+describe('Verification — chooseBestOpening preserves 3-of-a-kind bombs', () => {
+  it('Test 12: DMQS R9 hand — opens with single, never breaks 4-bomb with 3-4-5 straight', () => {
+    // DMQS R9: Charlie held [4c, 4c, 4s, Qs, 9h, 5d, 3h] and opened with
+    // 3♥ 4♣ 5♦ straight, breaking his 4-of-a-kind bomb. The bomb-preserving-
+    // straight filter at chooseBestOpening (line ~328) should have excluded
+    // 3-4-5 because rank '4' is in bombRanks. This test verifies the filter
+    // behaves correctly on the exact hand. If it passes, the live game's
+    // behavior was likely a stale deploy, not a code bug.
+    const charlieHand: Card[] = [
+      card('4', 'clubs', false, 'p1-4c1'),
+      card('4', 'clubs', false, 'p1-4c2'),
+      card('4', 'spades', false, 'p1-4s'),
+      card('Q', 'spades', false, 'p1-Qs'),
+      card('9', 'hearts', true, 'p1-9h'),
+      card('5', 'diamonds', true, 'p1-5d'),
+      card('3', 'hearts', true, 'p1-3h'),
+    ];
+    // Other players need 2 red 10s among them so the engine can identify a
+    // red10 team. Charlie (p1) is on black10. Put red 10s with p0 and p4.
+    const p0Hand: Card[] = [
+      card('10', 'hearts', true, 'p0-10h'),
+      card('A', 'spades', false, 'p0-As'),
+      card('K', 'clubs', false, 'p0-Kc'),
+      card('J', 'spades', false, 'p0-Js'),
+      card('8', 'spades', false, 'p0-8s'),
+      card('7', 'spades', false, 'p0-7s'),
+      card('6', 'spades', false, 'p0-6s'),
+    ];
+    const p4Hand: Card[] = [
+      card('10', 'diamonds', true, 'p4-10d'),
+      card('A', 'hearts', true, 'p4-Ah'),
+      card('K', 'diamonds', true, 'p4-Kd'),
+      card('J', 'hearts', true, 'p4-Jh'),
+      card('Q', 'hearts', true, 'p4-Qh'),
+      card('9', 'diamonds', true, 'p4-9d'),
+      card('8', 'hearts', true, 'p4-8h'),
+    ];
+    const blackFiller = (suitTag: string): Card[] => [
+      card('2', 'spades', false, `${suitTag}-2s`),
+      card('K', 'spades', false, `${suitTag}-Ks`),
+      card('Q', 'clubs', false, `${suitTag}-Qc`),
+      card('J', 'clubs', false, `${suitTag}-Jc`),
+      card('9', 'clubs', false, `${suitTag}-9c`),
+      card('8', 'clubs', false, `${suitTag}-8c`),
+    ];
+    const hands: Card[][] = [
+      p0Hand,
+      charlieHand,
+      blackFiller('p2'),
+      blackFiller('p3'),
+      p4Hand,
+      blackFiller('p5'),
+    ];
+    const teams: ('red10' | 'black10')[] = [
+      'red10', 'black10', 'black10', 'black10', 'red10', 'black10',
+    ];
+    const engine = setupOpeningEngine(hands, teams, 'p1');
+
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p1');
+    expect(decision.action).toBe('play');
+    if (decision.action === 'play') {
+      // The bot must NOT play a multi-card play that includes any rank-4 card,
+      // since rank 4 is bomb-rank in this hand. Acceptable plays: any single
+      // (3, 5, 9, Q) or… actually no other multi-card plays exist without
+      // rank 4 from this hand (no pairs, no straight without 4).
+      const usesRankFour = decision.cards.some(c => c.rank === '4');
+      expect(usesRankFour).toBe(false);
+      expect(decision.cards.length).toBe(1); // forced to a single
+    }
+  });
+});
