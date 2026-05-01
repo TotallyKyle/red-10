@@ -343,6 +343,14 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
   const bombCardCount = cards.filter(c => bombRanks.has(c.rank)).length;
   score -= bombCardCount * 5;
 
+  // Red-10 reveal penalty: leading with a red 10 reveals team identity. -2
+  // per red 10 mirrors a one-rank shift in the avgRank-weight (2 per rank),
+  // so a red-10 single scores like a same-rank black card minus one rank
+  // tier. Tiebreaks 10♥ vs 10♠ openings; doesn't override real value
+  // (full-hand-exit +100 dwarfs this; cards.length*10 also dominates).
+  const redTenCount = cards.filter(c => c.rank === '10' && c.isRed).length;
+  score -= redTenCount * 2;
+
   // Bonus for straights and paired straights (harder to beat)
   const fmt = detectFormat(cards);
   if (fmt === 'straight') score += 5;
@@ -1135,7 +1143,18 @@ function smartPlayDecision(
         if (!aBomb && bBomb) return -1;
         const aMin = Math.min(...a.map(c => rankValue(c.rank)));
         const bMin = Math.min(...b.map(c => rankValue(c.rank)));
-        return aMin - bMin;
+        // Red-10 reveal penalty: each red 10 in a play counts as +1 effective
+        // rank in the comparison. Reveals expose team identity for free —
+        // when a non-revealing alternative exists at the same or one-lower
+        // rank, prefer it. Strictly tiebreaks 10♥ vs 10♠ singles (Game 1 R3,
+        // Bot Dave); flips J♦Q♣K♥ over 10♥J♦Q♣ for 3-card straights (Game 2
+        // R4, Bot Eve).
+        const aRedTens = a.filter(c => c.rank === '10' && c.isRed).length;
+        const bRedTens = b.filter(c => c.rank === '10' && c.isRed).length;
+        const aScore = aMin + aRedTens;
+        const bScore = bMin + bRedTens;
+        if (aScore !== bScore) return aScore - bScore;
+        return aRedTens - bRedTens;
       });
       const cheapest = sorted[0];
 
@@ -1216,11 +1235,17 @@ function smartPlayDecision(
         // Conservative bomb use: avoid burning a triple against a non-bomb if a
         // large-hand opponent (8+ cards) is still active — they likely have a
         // bigger bomb and will outbid, making our burn wasteful.
+        //
+        // Carve-out: when highThreat (opponent at ≤ 2 cards), skip the guard —
+        // the immediate must-block dominates speculative concerns about another
+        // opponent's bigger bomb. 83MQ R6: Charlie passed on Eve's A-pair while
+        // holding 3×3 with Alice (opp) at 2 cards; Alice exited the next round.
         if (
           isBombPlay &&
           cheapest.length === 3 &&
           round.lastPlay.format !== 'bomb' &&
           !tryingToExit &&
+          !highThreat &&
           opponents.some(p => p.handSize >= 8)
         ) {
           return { action: 'pass' };
