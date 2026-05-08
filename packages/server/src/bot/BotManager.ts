@@ -546,6 +546,74 @@ function lastPlayByTeammate(engine: GameEngine, playerId: string): boolean {
 }
 
 /**
+ * Check if the last play was made by a player whose team is PUBLICLY known
+ * to be opposing. "Publicly known" means: doubling-phase teams reveal
+ * (`state.doubling.teamsRevealed`) OR the player has revealed at least one
+ * red 10 during play (`p.revealedRed10Count > 0`).
+ *
+ * Used to relax bomb-deploy guards — when we can be certain we're bombing a
+ * confirmed opponent, the bomb is spent on a real target rather than wasted
+ * speculatively. Returns false if last player's team isn't publicly known.
+ */
+function lastPlayPubliclyByOpponent(engine: GameEngine, playerId: string): boolean {
+  const state = engine.getState();
+  const round = state.round;
+  if (!round?.lastPlay) return false;
+
+  const me = state.players.find(p => p.id === playerId);
+  const lastPlayer = state.players.find(p => p.id === round.lastPlay!.playerId);
+  if (!me || !lastPlayer || !me.team || !lastPlayer.team) return false;
+  if (lastPlayer.team === me.team) return false; // teammate, not opp
+
+  // Public confirmation: either teams were revealed in doubling, or this
+  // specific player has revealed via playing a red 10.
+  if (state.doubling?.teamsRevealed) return true;
+  return lastPlayer.revealedRed10Count > 0;
+}
+
+/**
+ * Detect "stranded low cards" — cards that can rarely be played in response
+ * because their rank is the lowest possible, so they only get out via leading.
+ * Returns true if the hand contains:
+ *   - An ORPHAN single at rank ≤ 5 (rank 3, 4, or 5), OR
+ *   - A straight whose lowest card is rank '3' (a 3-4-5+ straight, beatable
+ *     in response by every higher straight of the same length)
+ *
+ * Used together with `hasExtraPower` to decide whether to burn a 2-single or
+ * bomb to win the current round, so the next opening can shed the stranded
+ * card.
+ */
+function hasStrandedLowCard(hand: Card[]): boolean {
+  const orphans = findOrphanCards(hand);
+  // rank ≤ 5 ⇔ rankValue ≤ 2 (3=0, 4=1, 5=2)
+  const hasLowOrphanSingle = hand.some(
+    c => orphans.has(c.id) && rankValue(c.rank) <= 2,
+  );
+  if (hasLowOrphanSingle) return true;
+
+  // A straight starting at rank '3' (rv=0) is the lowest possible 3-straight
+  // and can ONLY be played as a lead.
+  const lowStraight = findValidStraights(hand, null).some(s => {
+    const minRank = Math.min(...s.map(c => rankValue(c.rank)));
+    return minRank === 0;
+  });
+  return lowStraight;
+}
+
+/**
+ * Detect "extra power" — bot has more winners than it strictly needs for
+ * defensive blocks, so spending one to win a round (and shed a stranded
+ * low card) is acceptable. Returns true if hand has:
+ *   - ≥ 2 distinct bomb ranks, OR
+ *   - ≥ 2 copies of rank '2' (the highest single)
+ */
+function hasExtraPower(hand: Card[]): boolean {
+  if (getBombRanks(hand).size >= 2) return true;
+  const twos = hand.filter(c => c.rank === '2').length;
+  return twos >= 2;
+}
+
+/**
  * Standard doubling logic used by all strategies.
  *
  * Doubling without a strong hand is a bad bet — if you lose, you pay double.
@@ -764,6 +832,33 @@ function decideChaGo(
       return 'cha';
     }
 
+    // Stuck-big-hand teammate cha (M3 carve-out): at handSize ≥ 10 on a teammate
+    // trigger with few copies remaining anywhere else, the auto-win path
+    // (paired-cha → likely no go → cha wins the round) is worth more than
+    // preserving a LOW-rank bomb in a stuck big hand. `estimatedRemaining ≤ 2`
+    // means at most 2 copies are in OTHER hands beyond the trigger play and our
+    // holdings — too few to make a counter-go + final-cha (needs a pair in one
+    // opp hand) realistic. Without this, LOW-rank + teammate-trigger always
+    // falls through to the final `return 'decline'` even with 3-of-a-kind.
+    //
+    // Restricted to LOW ranks (3-J): 3-of-As, 3-of-Ks, etc. are higher-value
+    // bombs whose preservation is worth more than seizing one round. The
+    // observed stuck-bot pattern (game 1 LA76 R1, SFYD R3, 9HRN) had bots
+    // holding 3-of-low-rank that they never deployed.
+    //
+    // Fires for matchingCards.length ≥ 3 — covers 3-of-a-kind and 4-of-a-kind.
+    // 4-of-a-kind cha leaves a pair (still useful), so no extra penalty.
+    const stuckBigHandTeammateCha =
+      matchingCards.length >= 3 &&
+      triggerIsTeammate &&
+      !isHighRank &&
+      !isMedRank &&
+      player.hand.length >= 10 &&
+      estimatedRemaining <= 2;
+    if (stuckBigHandTeammateCha) {
+      return 'cha';
+    }
+
     // Bomb-preservation gate: if cha would reduce a bomb-rank group below 3 cards
     // (i.e., we hold ×3 or ×4 of the trigger rank), playing a 2-card pair destroys
     // the bomb. Only the two critical reasons above justify that cost — decline here.
@@ -799,6 +894,25 @@ function decideChaGo(
   // If the trigger is a teammate (e.g., they just played the go-single), cha-ing
   // over them steals their trick — always decline in that case.
   if (!triggerIsTeammate) {
+    // M-Reveal: reveal-aware cha. When the trigger play included a red 10
+    // (publicly outed the trigger player as red10) AND the trigger player is
+    // a confirmed opponent, the cha is much higher value than the speculative
+    // base case — we know exactly whose tempo we're stealing, and the trigger
+    // burned their reveal-protection already. Fast-track to cha for any
+    // afterChaRemaining ≤ 3 (vs. the speculative 0.6/0.3 random-decline path
+    // that would otherwise apply for 1/2 copies remaining and decline outright
+    // for 3+).
+    //
+    // In practice this only fires for triggerRank = '10' (since cha-go triggers
+    // on single plays and only red 10s carry the team-reveal effect).
+    // From H4RH R4: Bot Dave declined cha on test's revealed 10♦ while holding
+    // pair-of-10s — losing the chance to seize lead from a confirmed opponent.
+    const triggerCards = round.lastPlay?.cards ?? [];
+    const triggerHadRedTen = triggerCards.some(c => c.rank === '10' && c.isRed);
+    if (triggerHadRedTen && afterChaRemaining <= 3) {
+      return 'cha';
+    }
+
     // Hand-shaping: if we hold a 5+ card straight that the cha pair won't break
     // AND we're already near-exit, cha to thin the hand toward that straight.
     // The hand-size gate matters: at 13 cards a 5-card straight doesn't make
@@ -925,6 +1039,7 @@ function smartPlayDecision(
   const highThreat = opponentMinHand <= 2;
   const medThreat = opponentMinHand <= 3;
   const isLastPlayByTeammate = round?.lastPlay ? lastPlayByTeammate(engine, playerId) : false;
+  const isLastPlayConfirmedOpp = round?.lastPlay ? lastPlayPubliclyByOpponent(engine, playerId) : false;
   const isLastPlayerDangerous = (() => {
     if (!round?.lastPlay) return false;
     const lp = state.players.find(p => p.id === round.lastPlay!.playerId);
@@ -1174,6 +1289,23 @@ function smartPlayDecision(
           return groupSize - playCount < 3;
         });
 
+      // M-OppBomb shared computation: when bombing a publicly-confirmed
+      // opponent and bomb is the only path to beat (cheapest IS the bomb,
+      // since the sort prefers non-bombs), several conservation guards
+      // relax. Special case: a 2-single lead requires a SMALL bomb (rank
+      // 3-7) OR ≥ 2 distinct bomb ranks — don't burn an A×3 to beat a 2.
+      const lastPlayIsTwoSingle =
+        round.lastPlay.format === 'single' && round.lastPlay.cards[0].rank === '2';
+      const cheapestBombMinRank = isBombPlay
+        ? Math.min(...cheapest.map(c => rankValue(c.rank)))
+        : 99;
+      const cheapestIsSmallBomb = cheapestBombMinRank <= 4; // ranks 3-7 (rv 0-4)
+      const myBombRanksCount = getBombRanks(player.hand).size;
+      const oppBombDeployOk =
+        isLastPlayConfirmedOpp &&
+        isBombPlay &&
+        (!lastPlayIsTwoSingle || cheapestIsSmallBomb || myBombRanksCount >= 2);
+
       // --- P1: trying to exit — always play ---
       if (tryingToExit) {
         return { action: 'play', cards: cheapest };
@@ -1190,15 +1322,50 @@ function smartPlayDecision(
         if (nearExitPlay) return { action: 'play', cards: nearExitPlay };
       }
 
+      // --- M-Stranded: burn a winner to seize lead when we have stranded
+      //     low cards AND extra power. The intent is to clear the stranded
+      //     card on the NEXT opening rather than letting it die in hand.
+      //     Conditions:
+      //       - Hand contains an orphan single at rank ≤ 5 OR a straight
+      //         starting at rank '3' (`hasStrandedLowCard`).
+      //       - Hand contains ≥ 2 distinct bomb ranks OR ≥ 2 twos
+      //         (`hasExtraPower` — we can spare one).
+      //       - A "winning beat" (bomb or 2-single) is available in bp.
+      //     Among winners, prefer 2-singles over bombs (preserve bombs),
+      //     then smallest bomb. Fires BEFORE defensive mode because
+      //     reducing trapped-card count is the goal even in losing races.
+      if (hasStrandedLowCard(player.hand) && hasExtraPower(player.hand)) {
+        const winningBeats = bp.filter(p =>
+          classifyBomb(p) !== null || (p.length === 1 && p[0].rank === '2'),
+        );
+        if (winningBeats.length > 0) {
+          const sortedWinners = [...winningBeats].sort((a, b) => {
+            const aBomb = classifyBomb(a);
+            const bBomb = classifyBomb(b);
+            if (!aBomb && bBomb) return -1; // 2-single first
+            if (aBomb && !bBomb) return 1;
+            if (aBomb && bBomb) {
+              if (aBomb.length !== bBomb.length) return aBomb.length - bBomb.length;
+              return aBomb.rankValue - bBomb.rankValue;
+            }
+            return 0;
+          });
+          return { action: 'play', cards: sortedWinners[0] };
+        }
+      }
+
       // --- Defensive mode: don't burn winners when we can't win the race ---
       // If the cheapest beating play uses a "winner" (bomb, A-pair, or
       // anything with min rank ≥ A), pass and conserve. Carve-outs:
       //   - tryingToExit (P1) already returned above, so we're not blocking exit.
       //   - isLastPlayByTeammate already returned pass above, so not affected.
       //   - Near-exit (≤7 cards with multi-card play to ≤2) also returned above.
+      //   - oppBombDeployOk: bombing a publicly-confirmed opp where the bomb is
+      //     the only path to beat — defensive's "save bombs" doesn't apply
+      //     when the deploy hits a real target.
       // The defensive-mode trigger requires my hand ≥ 6, so this only fires
       // mid-game.
-      if (isDefensive && (isBombPlay || playMinRank >= 11)) {
+      if (isDefensive && (isBombPlay || playMinRank >= 11) && !oppBombDeployOk) {
         return { action: 'pass' };
       }
 
@@ -1223,34 +1390,110 @@ function smartPlayDecision(
         // counter-bombed. Two carve-outs: trying to exit (bomb might force exit)
         // or must-block an opponent at ≤ 1 card. Can be disabled via
         // opts.disableSingleBombGuard for legacy A/B testing.
+        //
+        // M-OppBomb carve-out: relax single-bomb-guard when we're bombing a
+        // publicly-confirmed opp (`oppBombDeployOk`). For 2-single leads
+        // specifically, the unified gate already requires small bomb (rank
+        // 3-7) OR ≥ 2 distinct bomb ranks — don't burn A×3 over a 2.
         if (
           !opts.disableSingleBombGuard &&
           isBombPlay &&
           round.lastPlay.format === 'single' &&
           !tryingToExit &&
-          opponentMinHand > 1
+          opponentMinHand > 1 &&
+          !oppBombDeployOk
         ) {
           return { action: 'pass' };
         }
-        // Conservative bomb use: avoid burning a triple against a non-bomb if a
-        // large-hand opponent (8+ cards) is still active — they likely have a
-        // bigger bomb and will outbid, making our burn wasteful.
+        // M4: race-aware bomb cap. When bombs are unlocked SOLELY via
+        // isLastPlayerDangerous (last player at handSize ≤ 3, but no opp
+        // at ≤ 2 — i.e., !highThreat), and our own hand is large (> 8),
+        // we can't actually win the race even if we win this round.
+        // Burning a bomb just buys lead-control for the next round at the
+        // cost of a key resource we'll need to thin our 9+ card hand.
+        // Pass instead. From LA76-3 R10 / LA76-5 R6 / 4YAF R4 reviews:
+        // Alice/Bob bombed at handSize 10-12 over a 3-card-hand opp's
+        // single, wasting bombs they needed for exit. tryingToExit
+        // already returned above, but check it again for clarity.
         //
-        // Carve-out: when highThreat (opponent at ≤ 2 cards), skip the guard —
-        // the immediate must-block dominates speculative concerns about another
-        // opponent's bigger bomb. 83MQ R6: Charlie passed on Eve's A-pair while
-        // holding 3×3 with Alice (opp) at 2 cards; Alice exited the next round.
+        // Carve-out: oppBombDeployOk — when bombing a publicly-known opp
+        // (no risk of wasted spend on a teammate, and the bomb is the only
+        // beat), the bomb is correctly directed even at handSize > 8.
+        if (
+          isBombPlay &&
+          !highThreat &&
+          isLastPlayerDangerous &&
+          handSize > 8 &&
+          !tryingToExit &&
+          !oppBombDeployOk
+        ) {
+          return { action: 'pass' };
+        }
+        // Conservative bomb use: avoid burning a triple if a large-hand opponent
+        // (8+ cards) is still active — they likely have a bigger bomb and will
+        // outbid, making our burn wasteful. Applies to both bomb-on-non-bomb
+        // and bomb-on-bomb (M5 extension): in a bomb-vs-bomb chain, a player at
+        // 8+ cards is statistically more likely to hold the next-bigger bomb.
+        // 8NW6 R3 sandwich case (Charlie 8×3 → Alice 9×3 → Eve J×3) sat in
+        // P6 conservation, not here, but the same race math applies whenever
+        // bombs are unlocked.
+        //
+        // Carve-outs:
+        //   - highThreat (opp at ≤ 2 cards): the immediate must-block
+        //     dominates the speculative bigger-bomb concern.
+        //   - oppBombDeployOk: when we KNOW we're bombing a real opp, the
+        //     bomb is spent correctly even if a third player has a bigger
+        //     one. Better to seize the round-win than hope the bomb
+        //     survives intact until later.
         if (
           isBombPlay &&
           cheapest.length === 3 &&
-          round.lastPlay.format !== 'bomb' &&
           !tryingToExit &&
           !highThreat &&
+          !oppBombDeployOk &&
           opponents.some(p => p.handSize >= 8)
         ) {
           return { action: 'pass' };
         }
         return { action: 'play', cards: cheapest };
+      }
+
+      // --- M-Sprint: 4-player team sprint deference (between P3 and P5) ---
+      // On a 4-player team in a 2v4, the only winning move is to push ONE
+      // teammate to 0 cards before any opp finisher beats them. Spreading
+      // round-wins across multiple teammates (H4RH R5-R8: Bob and Dave traded
+      // round wins while Eve barely shrank) leaves no teammate close enough
+      // to actually exit. Defer marginal beats to the smallest-hand teammate
+      // so they can take the round and run.
+      //
+      // Carve-outs already handled before reaching here:
+      //   - tryingToExit (P1) — handSize ≤ 2 returned earlier
+      //   - isLastPlayByTeammate (P2) — returned pass earlier
+      //   - effectivelyHighThreat (P3) — returned above (always returns)
+      //
+      // Fires only when:
+      //   - my team has 4 initial members (the structurally disadvantaged side)
+      //   - no medium-threat opp pressure (medThreat = opp at ≤ 3 cards;
+      //     in that case blocking dominates sprint coordination)
+      //   - at least one teammate has strictly smaller hand than mine
+      //   - at least one such smallest-hand teammate hasn't already passed
+      //     this round (else deferring is pointless — they can't act)
+      //   - the cheapest beat costs power resources (bomb, bomb-breaking
+      //     non-bomb, or rank ≥ A) — cheap LOW-rank beats are kept since
+      //     hoarding those for later doesn't help the sprinter
+      const myTeamSize = state.players.filter(p => p.team === player.team).length;
+      const sprinterCandidates = teammates.filter(t => t.handSize === teammateMinHand);
+      const anySprinterCanStillAct = sprinterCandidates.some(
+        t => round && !hasPassedThisRound(t.id, round, state.players),
+      );
+      const sprintDeference =
+        myTeamSize === 4 &&
+        !medThreat &&
+        teammateMinHand < handSize &&
+        anySprinterCanStillAct &&
+        (isBombPlay || isBreakingBomb || playMinRank >= 11);
+      if (sprintDeference) {
+        return { action: 'pass' };
       }
 
       // --- P5: medium threat — play non-bombs freely ---
@@ -1277,6 +1520,27 @@ function smartPlayDecision(
             return { action: 'pass' };
           }
         }
+      }
+
+      // M5: bomb-vs-bomb sandwich avoidance. If our cheapest beating bomb is a
+      // 3-card bomb AND a large-hand opponent (≥ 8 cards) is still active,
+      // they likely hold a bigger bomb and will counter-bomb us — burning our
+      // bomb for nothing. From 8NW6 R3: J 5×3 → Alice 9×3 → Eve J×3, where
+      // Alice's 9-bomb was sandwiched between two opp bombs. Pass to preserve
+      // the resource.
+      // Carve-outs:
+      //   - tryingToExit (already a top-level branch).
+      //   - oppBombDeployOk: when bombing a publicly-known opp, the
+      //     spend is correctly directed; seizing lead beats hoarding.
+      if (
+        isBombPlay &&
+        round.lastPlay.format === 'bomb' &&
+        cheapest.length === 3 &&
+        !tryingToExit &&
+        !oppBombDeployOk &&
+        opponents.some(p => p.handSize >= 8)
+      ) {
+        return { action: 'pass' };
       }
 
       // Don't waste A (11) or 2 (12) to beat cards below Q (9)
