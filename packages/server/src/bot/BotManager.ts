@@ -44,6 +44,8 @@ export interface BotPlayOptions {
   disableDefensiveMode?: boolean;
   /** If true, skip the rescue-stranded-teammate logic (legacy A/B). */
   disableTeammateRescue?: boolean;
+  /** If true, skip the cha-bait opener bonus for low singletons (legacy A/B). */
+  disableChaBait?: boolean;
 }
 
 // ---- Inline strategies (simplified versions of simulator strategies) ----
@@ -312,7 +314,13 @@ function hasPassedThisRound(
  *   3. Plays with lower ranks (save high cards for beating others)
  *   4. Avoid using cards that are part of bombs (preserve bombs for later)
  */
-function scoreOpening(cards: Card[], hand: Card[]): number {
+function scoreOpening(
+  cards: Card[],
+  hand: Card[],
+  engine?: GameEngine,
+  playerId?: string,
+  opts: BotPlayOptions = {},
+): number {
   let score = 0;
   const bombRanks = getBombRanks(hand);
   const orphans = findOrphanCards(hand);
@@ -399,13 +407,54 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
     score += 100;
   }
 
+  // Cha-bait bonus: for a low-rank single opener, when a publicly-known
+  // teammate has enough cards to plausibly hold a higher single of that rank,
+  // award a small bonus. The bait works when an opponent chas with a pair,
+  // letting our teammate "go" with their higher single and seize the lead.
+  // Conditions:
+  //   - At least one PUBLICLY-known teammate (teamsRevealed OR red10 played)
+  //     has handSize >= 5.
+  //   - Hand size >= 6 (not in late-game / not urgent to win).
+  //   - Card is a singleton of rank 3-8 (rankValue 0-5).
+  // Bonus = +6 (calibrated to tip edge cases between low-single and low-pair).
+  if (
+    !opts.disableChaBait &&
+    engine &&
+    playerId &&
+    cards.length === 1 &&
+    rankValue(cards[0].rank) <= 5 &&
+    hand.length >= 6
+  ) {
+    const state = engine.getState();
+    const me = state.players.find(p => p.id === playerId);
+    if (me?.team) {
+      const teamsPubliclyRevealed = state.doubling?.teamsRevealed === true;
+      const bigTeammateExists = state.players.some(p => {
+        if (p.isOut) return false;
+        if (p.id === playerId) return false;
+        if (p.team !== me.team) return false;
+        if (p.handSize < 5) return false;
+        // Public confirmation required
+        return teamsPubliclyRevealed || p.revealedRed10Count > 0;
+      });
+      if (bigTeammateExists) {
+        score += 6;
+      }
+    }
+  }
+
   return score;
 }
 
 /**
  * Choose the best opening play from all possible options.
  */
-function chooseBestOpening(hand: Card[], opts: BotPlayOptions = {}): Card[] | null {
+function chooseBestOpening(
+  hand: Card[],
+  opts: BotPlayOptions = {},
+  engine?: GameEngine,
+  playerId?: string,
+): Card[] | null {
   const candidates: Card[][] = [];
   const bombRanks = getBombRanks(hand);
 
@@ -469,10 +518,10 @@ function chooseBestOpening(hand: Card[], opts: BotPlayOptions = {}): Card[] | nu
 
   // Score and pick the best
   let best = candidates[0];
-  let bestScore = scoreOpening(best, hand);
+  let bestScore = scoreOpening(best, hand, engine, playerId, opts);
 
   for (let i = 1; i < candidates.length; i++) {
-    const s = scoreOpening(candidates[i], hand);
+    const s = scoreOpening(candidates[i], hand, engine, playerId, opts);
     if (s > bestScore) {
       bestScore = s;
       best = candidates[i];
@@ -1272,7 +1321,7 @@ function smartPlayDecision(
     }
 
     // (e) Default: use the scoring system to pick the best opening
-    const bestOpening = chooseBestOpening(player.hand, opts);
+    const bestOpening = chooseBestOpening(player.hand, opts, engine, playerId);
     if (bestOpening) return { action: 'play', cards: bestOpening };
     return { action: 'play', cards: [player.hand[0]] };
   }
@@ -1790,6 +1839,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
       disableMustBlockPassedCheck: true,
       disableDefensiveMode: true,
       disableTeammateRescue: true,
+      disableChaBait: true,
     });
   },
 };
