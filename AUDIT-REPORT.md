@@ -4,6 +4,102 @@ This document tracks impl-loop runs against the bot strategy code. Latest run on
 
 ---
 
+## Run 2026-05-11 — 2026-05-10 game-review follow-up: M1-M4
+
+Source: review of 7 bot/human games on 2026-05-10 (TotallyKyle/red-10-logs/reviews/). Original 6 candidate improvements proposed; user dropped #6 (format-detector "issue" is by-design special-bomb categories) and held #1 (triple-bomb doubling threshold) for further data. Items #2-5 implemented here as M1-M4.
+
+### Summary
+
+- Total milestones implemented: **4**
+- Total issues found across audit passes: **0**
+- Audit passes per milestone: 1 each (all first-pass clean)
+- Tests: **304 → 327** (+23 new tests across 4 new test files)
+- All 28 test files / 327 tests pass
+
+### Commits
+
+- `afc703d` — M1: probabilistic 2v4 doubling penalty for 1-red-10 holders
+- `aacd23e` — M2: rescue publicly-known teammate stranded at handSize=1
+- `84c1af5` — M3: penalize straight openers that break held pairs
+- `efaec95` — M4: cha-bait bonus for low-single openers with capable teammate
+
+All commits unpushed; awaiting Kyle's review.
+
+### Milestones
+
+#### M1 — Probabilistic 2v4 doubling penalty (`afc703d`)
+
+**What shipped:** When a bot holds exactly 1 red 10 on team red10, `standardDoublingDecision` bumps the strength threshold by +0.4 (vs the +1 used for deterministic 2v4 with 2 red 10s). Reflects the ~40% prior on 2v4 given the team-size distribution.
+
+**Files:** `packages/server/src/bot/BotManager.ts` (+19 lines), new `__tests__/OneRedTenDoubling.test.ts` (+248 lines, 5 tests). Pre-existing `StrategyFixes.test.ts` Test 3 updated to reflect new behavior (1-red-10 + strength=9 now skips).
+
+**Legacy bypass:** `disable1RedTenDoublingPenalty` flag wired into `LegacyPreFixesStrategy`.
+
+No issues found in audit. Mutual exclusion with deterministic 2v4 path is clean. `hasStrongStructure` unchanged for probabilistic case (per spec — only threshold tightened).
+
+#### M2 — Stranded-teammate rescue (`aacd23e`)
+
+**What shipped:** New `findStrandedTeammate(engine, playerId)` helper + M-RescueTeammate block in `smartPlayDecision`'s response branch, fires before existing M-Stranded. When a publicly-known teammate is at handSize === 1 and bot has `hasExtraPower`, bot burns winning beat (2-single preferred, then smallest bomb) to seize lead. Next round's opening branch (b) leads a low single, letting the teammate play their orphan and exit.
+
+**Files:** BotManager.ts (+74 lines), new `__tests__/TeammateRescue.test.ts` (+375 lines, 9 tests).
+
+**Design decision:** Original spec called for tracking "≥2 consecutive completed rounds at hand≤2." Engine state doesn't expose completed-round history, so simplified to `handSize === 1` (strongest signal). Revisit if more nuance needed.
+
+**Legacy bypass:** `disableTeammateRescue`.
+
+No issues found. Guard ordering correct (`!tryingToExit && !isLastPlayByTeammate`). 9 tests cover all branches including edge cases (no extra power, handSize=2, teams hidden, opponent stranded, self-exit, last-play-by-teammate).
+
+#### M3 — Straight pair-preservation (`84c1af5`)
+
+**What shipped:** In `scoreOpening`, straight plays lose 6 points per "breaking" card (3 if breaking a triple+ group). Plus small length bonuses (5-card +0.5, 6-card +1.0, 7+ +1.5) on top of existing `cards.length * 10` weight.
+
+**Files:** BotManager.ts (~30 lines in scoreOpening), new `__tests__/StraightPairPreservation.test.ts` (6 tests).
+
+**Design clarification (made during context-gathering):** Original spec emphasized "long-straight preference." Investigation showed `findValidStraights` already enumerates all lengths ≥3 and `cards.length * 10` already weights heavily for length. Real gap was *pair preservation* — straights consuming a card from a held pair had no penalty. Reframed milestone to focus on the actual bug.
+
+**Legacy bypass:** None (pure scoring improvement; A/B can be added later if needed).
+
+No issues found. Bomb-rank cards are pre-filtered out of straight candidates upstream in `chooseBestOpening`, so the pair-break penalty primarily applies to plain 2-of-a-kind pairs. The 6-point penalty is calibrated to lose to a 4-card straight's +10 length but win against staying with the pair when no better alternative exists.
+
+#### M4 — Cha-bait opener bonus (`efaec95`)
+
+**What shipped:** When bot has team identity, at least one publicly-known same-team teammate with handSize ≥ 5, bot's own handSize ≥ 6, and is considering a singleton of rank 3-8, `scoreOpening` adds +6. Tips edge-case choices between low-singles and low-pairs toward the single — setting up cha→teammate-go round-seizing.
+
+**Files:** BotManager.ts (~40 lines, scoreOpening and chooseBestOpening signatures extended with optional `engine`, `playerId`), new `__tests__/ChaBaitOpener.test.ts` (8 tests).
+
+**Legacy bypass:** `disableChaBait`.
+
+No issues found. Function signature extensions are backward-compatible (optional parameters). Symmetric for red10 and black10 teams. The +6 bonus is calibrated for hand=7 where the large-hand-dump bonus (+6 for 2-card plays) makes a low pair score 46; a rank-3 singleton scores 42 without bait, 48 with — tipping the close call.
+
+### Pattern Analysis
+
+- **Consistent design pattern across all 4 milestones:** each adds new gated logic with a `disable*` opts flag (default false), and registers the flag in `LegacyPreFixesStrategy` to preserve A/B parity. Every production strategy gets the new behavior automatically.
+- **Conservative thresholds throughout:** +0.4 (M1), 6-point penalty (M3), +6 bonus (M4). Small enough to tip edge cases without dominating scoring.
+- **Zero engine state changes.** All milestones rely only on existing state (`state.round`, `state.players[].handSize`, `state.doubling.teamsRevealed`, `state.players[].revealedRed10Count`).
+- **No new strategies added to `ALL_STRATEGIES`.** All tunings of existing logic.
+
+### Cross-milestone integration check
+
+- M2 and M4 both use the "publicly known teammate" pattern (`teamsRevealed || revealedRed10Count > 0`) — duplicated rather than shared. Acceptable; extract to a helper if the pattern proliferates further.
+- M3 and M4 both modify `scoreOpening`. M3 lands first; M4 extends the function signature on top. No conflict.
+- M1 and M2 rely on existing `evaluateHandStrength` / `hasExtraPower` helpers. No new shared dependencies.
+
+### Unresolved Items
+
+- **Review item #1 (lower triple-bomb doubling threshold) intentionally NOT implemented.** Investigation showed the current threshold is conservative-but-correct for the bot's risk model. Em/Ty's wins in 04-24-02 and 04-59-30 are single-sample variance — their hands actually score ~3.5 vs the threshold of 9. Recommendation: shadow-log "would-have-doubled" decisions across more samples before tuning.
+- **M2 simplification:** `handSize === 1` instead of "≥2 consecutive rounds at handSize≤2." Revisit if data shows it's too conservative or if engine adds round history.
+- **M3 didn't ship the helper `countPairBreakingCards`** — inlined the logic. Extract if a similar check is needed elsewhere (e.g., response-branch plays that break pairs).
+- **A/B simulation not yet run.** All 4 changes have unit tests but no end-to-end win-rate measurement. Recommend running `npm run test:ab` to compare SmartRacer (new) vs LegacyPreFixes (old) over 10K+ games before merging to main.
+
+### Next steps for Kyle
+
+1. Review the 4 commits locally (`git log -p afc703d..efaec95`).
+2. Run A/B simulation. Look for shifts in scoring-team-failure rate and 2v4-doubling-loss rate.
+3. If A/B numbers look healthy, merge and let it run for a week; re-run the daily review skill to see if patterns shift.
+4. Revisit triple-bomb doubling (#1) once more game data accrues.
+
+---
+
 ## Run 2026-05-07 — H4RH Follow-up part 2: M-OppBomb + M-Stranded (replacing M-MultiBomb)
 
 ### Summary
