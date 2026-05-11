@@ -357,7 +357,35 @@ function scoreOpening(cards: Card[], hand: Card[]): number {
 
   // Bonus for straights and paired straights (harder to beat)
   const fmt = detectFormat(cards);
-  if (fmt === 'straight') score += 5;
+  if (fmt === 'straight') {
+    score += 5;
+    // Length bonus for long straights: 5-card +0.5, 6-card +1.0, 7+-card +1.5.
+    // Small reinforcement on top of `cards.length * 10` to slightly amplify
+    // the preference for longer dumps, without overwhelming other factors.
+    if (cards.length >= 7) score += 1.5;
+    else if (cards.length >= 6) score += 1.0;
+    else if (cards.length >= 5) score += 0.5;
+    // Pair-breaking penalty: each card the straight consumes from a held pair
+    // / triple costs 6 points. Calibrated so a 3-card straight breaking 1 pair
+    // (-6) loses to a 4-card straight that breaks nothing (which gains +10
+    // from cards.length). Triple-rank breaks (group≥3) are HALVED because
+    // the triple becomes a pair, still a useful play.
+    const straightGroups = groupByRank(hand);
+    let pairBreakPenalty = 0;
+    const breakRemovalsByRank = new Map<string, number>();
+    for (const c of cards) {
+      breakRemovalsByRank.set(c.rank, (breakRemovalsByRank.get(c.rank) ?? 0) + 1);
+    }
+    for (const [rank, removed] of breakRemovalsByRank) {
+      const groupSize = straightGroups.get(rank)?.length ?? 0;
+      if (groupSize >= 2 && removed < groupSize) {
+        // Triple+ groups still leave a pair after removal — halved penalty.
+        const factor = groupSize >= 3 ? 3 : 6;
+        pairBreakPenalty += factor * removed;
+      }
+    }
+    score -= pairBreakPenalty;
+  }
   if (fmt === 'paired_straight') score += 8;
 
   // Large-hand dump incentive: when stuck with ≥7 cards, prefer plays that shed
