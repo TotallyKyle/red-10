@@ -139,9 +139,11 @@ describe('Fix 2 — 2v4 doubling penalty', () => {
     expect(decision.action).toBe('double');
   });
 
-  it('Test 3: 1 red 10 + 7×4 at strength 9 → double (no 2v4 penalty)', () => {
+  it('Test 3: 1 red 10 + 7×4 at strength 9 → skip (probabilistic 2v4 penalty)', () => {
     // Same structural strength as Test 1 but only 1 red 10 — isKnown2v4=false.
-    // Normal: strength(9) >= threshold(9), hasStrongStructure (1 bomb + groups≤4) → double.
+    // Probabilistic 2v4 penalty: redTensHeld=1, team=red10 → isProbabilistic2v4=true.
+    // effectiveThreshold=9.4. strength(9) < 9.4 → skip.
+    // (Previously this was 'double' before the +0.4 probabilistic penalty was added.)
     const p0Hand: Card[] = [
       card('10', 'hearts', true, 'p0-10h'),
       card('7', 'hearts', true, 'p0-7h'),
@@ -162,7 +164,7 @@ describe('Fix 2 — 2v4 doubling penalty', () => {
     const engine = setupDoublingEngine(hands);
 
     const decision = SmartRacerStrategy.decideDoubling(engine, 'p0');
-    expect(decision.action).toBe('double');
+    expect(decision.action).toBe('skip');
   });
 
   it('Test 4: Black10 player + 7×4 at strength 9 → double (no 2v4 penalty)', () => {

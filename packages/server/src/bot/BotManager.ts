@@ -32,6 +32,8 @@ export interface BotPlayOptions {
   disableBombPreservation?: boolean;
   /** If true, skip the 2v4 doubling penalty when player holds 2 red 10s. */
   disable2v4DoublingPenalty?: boolean;
+  /** If true, skip the milder 1-red-10 doubling penalty for probabilistic 2v4. */
+  disable1RedTenDoublingPenalty?: boolean;
   /** If true, allow P3 to bomb single leads even when not near-exit / must-block. */
   disableSingleBombGuard?: boolean;
   /** If true, P3 fires whenever opponentMinHand ≤ 2 regardless of whether the
@@ -650,10 +652,24 @@ function standardDoublingDecision(
   const redTensHeld = player.hand.filter(c => c.rank === '10' && c.isRed).length;
   const isKnown2v4 = redTensHeld === 2 && !opts.disable2v4DoublingPenalty;
 
+  // Probabilistic 2v4: when player is red10 and holds exactly 1 red 10, the
+  // split could be 3v3 (~57.75%) or 2v4 (~40%). Apply a milder threshold bump
+  // (+0.4) to reflect the 40% 2v4 prior. Does NOT tighten hasStrongStructure
+  // (only the strength threshold).
+  const isProbabilistic2v4 =
+    !isKnown2v4 &&
+    redTensHeld === 1 &&
+    player.team === 'red10' &&
+    !opts.disable1RedTenDoublingPenalty;
+
   // +1 is the meaningful delta here: evaluateHandStrength caps at 10, so threshold+2
   // would be unreachable for any hand. +1 ensures a 2v4 player needs top-tier
   // strength (2 bombs + density) rather than merely borderline (1 bomb + density).
-  const effectiveThreshold = isKnown2v4 ? strengthThreshold + 1 : strengthThreshold;
+  const effectiveThreshold = isKnown2v4
+    ? strengthThreshold + 1
+    : isProbabilistic2v4
+      ? strengthThreshold + 0.4
+      : strengthThreshold;
   const hasStrongStructure = isKnown2v4
     ? distinctBombRanks >= 2
     : distinctBombRanks >= 2 ||
@@ -1662,6 +1678,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
   decideDoubling(engine, playerId) {
     return standardDoublingDecision(engine, playerId, 9, {
       disable2v4DoublingPenalty: true,
+      disable1RedTenDoublingPenalty: true,
     });
   },
   decidePlay(engine, playerId) {
