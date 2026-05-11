@@ -42,6 +42,8 @@ export interface BotPlayOptions {
   /** If true, skip defensive-mode logic — bot always races aggressively even
    * when its hand is too weak to win the race (pre-Fix-D behavior). */
   disableDefensiveMode?: boolean;
+  /** If true, skip the rescue-stranded-teammate logic (legacy A/B). */
+  disableTeammateRescue?: boolean;
 }
 
 // ---- Inline strategies (simplified versions of simulator strategies) ----
@@ -613,6 +615,39 @@ function hasExtraPower(hand: Card[]): boolean {
   if (getBombRanks(hand).size >= 2) return true;
   const twos = hand.filter(c => c.rank === '2').length;
   return twos >= 2;
+}
+
+/**
+ * Detect "stranded teammate" — a publicly-known teammate down to handSize === 1
+ * (their last card). When this returns true and the bot has extra power, burning
+ * a winner in the responding branch to seize the lead is high-value: the bot
+ * leads a low single next round, letting the teammate play out their orphan card.
+ *
+ * "Publicly known" = doubling.teamsRevealed is true OR the candidate teammate
+ * has played a red 10 (revealedRed10Count > 0). Without public knowledge, the
+ * bot can't reliably identify a stranded teammate.
+ *
+ * Returns the stranded teammate's id, or null if none qualify.
+ */
+function findStrandedTeammate(engine: GameEngine, playerId: string): string | null {
+  const state = engine.getState();
+  const me = state.players.find(p => p.id === playerId);
+  if (!me || !me.team) return null;
+
+  const teamsPubliclyRevealed = state.doubling?.teamsRevealed === true;
+
+  for (const candidate of state.players) {
+    if (candidate.isOut) continue;
+    if (candidate.id === playerId) continue;
+    if (!candidate.team || candidate.team !== me.team) continue;
+    if (candidate.handSize !== 1) continue;
+    // Must be publicly confirmed as teammate
+    const isPubliclyTeammate =
+      teamsPubliclyRevealed || candidate.revealedRed10Count > 0;
+    if (!isPubliclyTeammate) continue;
+    return candidate.id;
+  }
+  return null;
 }
 
 /**
@@ -1338,6 +1373,44 @@ function smartPlayDecision(
         if (nearExitPlay) return { action: 'play', cards: nearExitPlay };
       }
 
+      // --- M-RescueTeammate: burn a winner to seize lead when a publicly-known
+      //     teammate is stranded at handSize === 1. Seizing the lead lets the
+      //     bot lead a low single next round (existing OPENING branch (b)),
+      //     letting the teammate play their orphan card and exit.
+      //     Conditions:
+      //       - A publicly-known teammate exists with handSize === 1.
+      //       - Bot has `hasExtraPower` (≥2 bomb ranks or ≥2 twos).
+      //       - A winning beat (bomb or 2-single) is available in bp.
+      //     Fires BEFORE M-Stranded. Skip when bot itself is exiting (P1) since
+      //     that's already handled, and when the last play is by a teammate
+      //     (handled by P2). Can be disabled via opts.disableTeammateRescue.
+      if (
+        !opts.disableTeammateRescue &&
+        !tryingToExit &&
+        !isLastPlayByTeammate &&
+        hasExtraPower(player.hand) &&
+        findStrandedTeammate(engine, playerId) !== null
+      ) {
+        const winningBeats = bp.filter(p =>
+          classifyBomb(p) !== null || (p.length === 1 && p[0].rank === '2'),
+        );
+        if (winningBeats.length > 0) {
+          // Same preference as M-Stranded: 2-single first, then smallest bomb.
+          const sortedWinners = [...winningBeats].sort((a, b) => {
+            const aBomb = classifyBomb(a);
+            const bBomb = classifyBomb(b);
+            if (!aBomb && bBomb) return -1;
+            if (aBomb && !bBomb) return 1;
+            if (aBomb && bBomb) {
+              if (aBomb.length !== bBomb.length) return aBomb.length - bBomb.length;
+              return aBomb.rankValue - bBomb.rankValue;
+            }
+            return 0;
+          });
+          return { action: 'play', cards: sortedWinners[0] };
+        }
+      }
+
       // --- M-Stranded: burn a winner to seize lead when we have stranded
       //     low cards AND extra power. The intent is to clear the stranded
       //     card on the NEXT opening rather than letting it die in hand.
@@ -1688,6 +1761,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
       disableSingleBombGuard: true,
       disableMustBlockPassedCheck: true,
       disableDefensiveMode: true,
+      disableTeammateRescue: true,
     });
   },
 };
