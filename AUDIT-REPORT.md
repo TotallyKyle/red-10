@@ -4,6 +4,72 @@ This document tracks impl-loop runs against the bot strategy code. Latest run on
 
 ---
 
+## Run 2026-05-11b — Hand=1 orphan-low trapping fix (M5)
+
+Source: human-reported pain point ("biggest flaw"). Empirical analysis of 115 game logs showed 30 bot-trapped-at-hand=1 instances (32% of all bot traps), all reconstructable cases held rank 3-8 cards. Root cause: the `isEndgame` race-mode in `scoreOpening` defavors leading low orphans at hand≤4 regardless of hand structure.
+
+### Summary
+
+- Total milestones implemented: **1** (M5)
+- Total issues found: **0** (first-pass clean)
+- Tests: **327 → 335** (+8 new tests, 3 existing tests updated for new behavior)
+- All 29 test files / 335 tests pass
+
+### Commit
+
+- `e1b1d13` — bot: gate endgame race-mode on hand strength + fix hand=2 fallback
+
+Unpushed; awaiting Kyle's review.
+
+### What shipped
+
+Three correlated changes in one commit:
+
+1. **`scoreOpening` endgame branch now gated on hand strength.** When `hand.length ≤ 4`, race-mode (`score += avgRank`) only fires if `isSuperStrong` (≥2 distinct bomb ranks OR special-bomb 4-4-A). Weak structures fall into dump-mode (orphan-low + low-rank preference, same scoring as non-endgame). This is the fix for the empirical hand=1 trap pattern.
+
+2. **`hasStrandedLowCard` widened from rv≤2 to rv≤6** (ranks 3-9). Affects the existing M-Stranded check in the response branch — bot now treats orphan 6/7/8/9 as stranded, eligible for "burn winner to seize lead" if `hasExtraPower`.
+
+3. **Bug fix at handSize=2 fallback** (`smartPlayDecision` opening branch). Comment promised "lead our LOWEST" but code returned `player.hand[0]` (first card in arbitrary deal order). Now correctly sorts ascending. Not gated behind the opts flag — legacy strategy also gets this fix.
+
+### Legacy bypass
+
+`disableEndgameStrengthGate` flag added to `BotPlayOptions`. When set:
+- `scoreOpening` endgame branch reverts to original `score += avgRank` always.
+- `hasStrandedLowCard` reverts to rv≤2 threshold.
+
+`LegacyPreFixesStrategy` opts updated. Other strategies (Aggressive, SmartRacer, HandSizeExploiter, TeamCoordinator, PreFixD) unchanged.
+
+### Audit findings: 0 issues
+
+Behavior tested across all four branches: weak hand=4 → dump-mode, super-strong hand=4 → race-mode preserved, hand=2 fallback returns lowest, legacy bypass restores original behavior.
+
+### Notes on existing-test updates
+
+Three existing tests were updated to reflect the new behavior:
+- `BotStrategy.test.ts` line 821: was encoding the OLD race-mode behavior ("prefers K-K pair over low single") with explicit `// Before fix / After fix` comments. Updated to the NEW dump-mode behavior. This test was always going to need updating when this trap got fixed.
+- `ChaBaitOpener.test.ts` Test 5: late-game weak-hand test. Updated from "pair leads" to "low orphan leads."
+- `TeammateRescue.test.ts` `powerBotHandSmall`: replaced a `6♣` filler with `K♣`. The 6 was triggering M-Stranded (now widened to rv≤6) and confounding the rescue-specific test. Pure test-isolation cleanup.
+
+All three test updates are documented inline with explanatory comments.
+
+### Empirical motivation
+
+From 115 game logs analyzed for this fix:
+- Bot trap rate by hand-size: 30 @ hand=1, 17 @ hand=2, 46 @ hand=3+ (total 93 bot-trapped instances)
+- Human trap rate: 11 instances total
+- Bots get trapped ~9× more often than humans
+- All 16 reconstructable bot-hand=1-trapped cards: rank 3-8 (rank distribution: 7×3s, 2×4s, 2×6s, 2×7s, 3×8s)
+- Hand=2 bot traps: 7 of 8 reconstructable cases had different ranks (no valid 2-card format) — the handSize=2 fallback bug applies in these cases
+
+### Next steps for Kyle
+
+1. Review the commit (`git show e1b1d13`).
+2. Run A/B simulation: `npm run test:ab` — this is a behavioral change with potentially wide impact. Look for shift in (a) win rate, (b) per-game-trapped-count, (c) hand=1 trap frequency specifically.
+3. If A/B looks healthy, merge and observe in production for a week. Daily review skill will surface whether the trap rate drops.
+4. Single-bomb opponent-aware race-mode detection (V2) — deferred. Will need engine state threading and an opp-handsize-conditional check.
+
+---
+
 ## Run 2026-05-11 — 2026-05-10 game-review follow-up: M1-M4
 
 Source: review of 7 bot/human games on 2026-05-10 (TotallyKyle/red-10-logs/reviews/). Original 6 candidate improvements proposed; user dropped #6 (format-detector "issue" is by-design special-bomb categories) and held #1 (triple-bomb doubling threshold) for further data. Items #2-5 implemented here as M1-M4.
