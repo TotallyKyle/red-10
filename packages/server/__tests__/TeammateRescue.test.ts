@@ -130,7 +130,10 @@ function powerBotHandSmall(): Card[] {
     card('Q', 'hearts', true, 'p1-Qh'),
     card('Q', 'spades', false, 'p1-Qs'),
     card('Q', 'clubs', false, 'p1-Qc'),
-    card('6', 'clubs', false, 'p1-6c'),
+    // Use K (rv=10) not a low rank — low orphan singles (rv≤6) now trigger
+    // M-Stranded (widened threshold) which fires before Teammate Rescue,
+    // confounding tests that check rescue specifically.
+    card('K', 'clubs', false, 'p1-Kc'),
   ];
 }
 

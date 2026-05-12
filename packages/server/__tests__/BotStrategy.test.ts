@@ -818,9 +818,14 @@ describe('BotManager — P3 bomb guard: no bombing over a winning teammate', () 
 });
 
 describe('BotManager — chooseBestOpening: endgame scoring (hand ≤ 4 cards)', () => {
-  it('prefers K+K pair over low single with 4-card hand', () => {
-    // Before fix: scoreOpening awarded low-rank bonus, making 4♦ score ~40 vs K+K ~24.
-    // After fix: endgame scoring (hand≤4) uses avgRank bonus, K+K scores ~30 vs 4♦ ~11.
+  it('prefers low orphan single over K+K pair with weak 4-card hand', () => {
+    // Hand: [K♠, K♥, 2♣, 4♦]. No bombs (K×2 not a bomb-rank), no special bomb.
+    // isEndgame=true (hand=4), but NOT super-strong → dump-mode scoring applies.
+    // Dump-mode scoring:
+    //   K-pair: 20 + orphanCount(0)*8 + (12-10)*2 = 24
+    //   4♦ single (orphan): 10 + 8 + (12-1)*2 = 40
+    //   2♣ single (orphan): 10 + 8 + (12-12)*2 - 20 (hasTwos) = -2
+    // 4♦ wins (40 > 24). Bot leads the low orphan to avoid trapping it.
     const hands: Card[][] = [
       [
         card('K', 'spades', false, 'p0-ks'),
@@ -848,8 +853,9 @@ describe('BotManager — chooseBestOpening: endgame scoring (hand ≤ 4 cards)',
     const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
     expect(decision.action).toBe('play');
     if (decision.action === 'play') {
-      expect(decision.cards).toHaveLength(2);
-      expect(decision.cards.every(c => c.rank === 'K')).toBe(true);
+      // Dump mode: 4♦ orphan single scores highest (40) → leads 4♦, not K-pair.
+      expect(decision.cards).toHaveLength(1);
+      expect(decision.cards[0].rank).toBe('4');
     }
   });
 });

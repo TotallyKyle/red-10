@@ -46,6 +46,10 @@ export interface BotPlayOptions {
   disableTeammateRescue?: boolean;
   /** If true, skip the cha-bait opener bonus for low singletons (legacy A/B). */
   disableChaBait?: boolean;
+  /** If true, restore the original endgame race-mode behavior (always prefer
+   * high cards when hand ≤ 4, regardless of hand strength). Also reverts the
+   * widened hasStrandedLowCard threshold to the original rv ≤ 2. */
+  disableEndgameStrengthGate?: boolean;
 }
 
 // ---- Inline strategies (simplified versions of simulator strategies) ----
@@ -332,9 +336,32 @@ function scoreOpening(
   const isEndgame = hand.length <= 4;
 
   if (isEndgame) {
-    // In endgame, prefer high-rank plays: they win rounds and accelerate exit.
-    // "Save high cards for responding" doesn't apply when few cards remain.
-    score += avgRank;
+    // Endgame race mode only fires for "super-strong" hands that can actually
+    // clear the remaining cards via bombs. For weak structures (separate singles,
+    // no bombs), the high-card preference traps orphan lows. Default to dump-mode
+    // scoring instead.
+    // Definition of super-strong: ≥2 distinct bomb ranks (triple+ in hand) OR
+    // the special bomb (44A: ≥2 fours + ≥1 ace).
+    const isgGroups = groupByRank(hand);
+    const isgDistinctBombRanks = [...isgGroups.values()].filter(cs => cs.length >= 3).length;
+    const isgFours = isgGroups.get('4');
+    const isgAces = isgGroups.get('A');
+    const isgHasSpecialBomb = !!(isgFours && isgFours.length >= 2 && isgAces && isgAces.length >= 1);
+    const isSuperStrong = isgDistinctBombRanks >= 2 || isgHasSpecialBomb;
+
+    if (isSuperStrong || opts.disableEndgameStrengthGate) {
+      // Race mode — strong enough to clear remaining via bombs. Prefer high.
+      score += avgRank;
+    } else {
+      // Weak structure — apply dump-mode scoring (same as non-endgame branch).
+      const orphanCount = cards.filter(c => orphans.has(c.id)).length;
+      score += orphanCount * 8;
+      score += (12 - avgRank) * 2;
+      const isgHasTwos = cards.some(c => c.rank === '2');
+      const isgHasAces = cards.some(c => c.rank === 'A');
+      if (isgHasTwos) score -= 20;
+      if (isgHasAces && !isgHasTwos) score -= 10;
+    }
   } else {
     // Bonus for playing orphan cards (dead weight we can only shed by leading)
     const orphanCount = cards.filter(c => orphans.has(c.id)).length;
@@ -656,7 +683,7 @@ function lastPlayPubliclyByOpponent(engine: GameEngine, playerId: string): boole
  * Detect "stranded low cards" — cards that can rarely be played in response
  * because their rank is the lowest possible, so they only get out via leading.
  * Returns true if the hand contains:
- *   - An ORPHAN single at rank ≤ 5 (rank 3, 4, or 5), OR
+ *   - An ORPHAN single at rank ≤ 9 (ranks 3-9), OR
  *   - A straight whose lowest card is rank '3' (a 3-4-5+ straight, beatable
  *     in response by every higher straight of the same length)
  *
@@ -664,11 +691,13 @@ function lastPlayPubliclyByOpponent(engine: GameEngine, playerId: string): boole
  * bomb to win the current round, so the next opening can shed the stranded
  * card.
  */
-function hasStrandedLowCard(hand: Card[]): boolean {
+function hasStrandedLowCard(hand: Card[], opts: BotPlayOptions = {}): boolean {
   const orphans = findOrphanCards(hand);
-  // rank ≤ 5 ⇔ rankValue ≤ 2 (3=0, 4=1, 5=2)
+  // Default threshold: rv ≤ 6 (ranks 3-9). Legacy threshold (rv ≤ 2, ranks 3-5)
+  // restored via opts.disableEndgameStrengthGate for backward compatibility.
+  const orphanRvThreshold = opts.disableEndgameStrengthGate ? 2 : 6;
   const hasLowOrphanSingle = hand.some(
-    c => orphans.has(c.id) && rankValue(c.rank) <= 2,
+    c => orphans.has(c.id) && rankValue(c.rank) <= orphanRvThreshold,
   );
   if (hasLowOrphanSingle) return true;
 
@@ -1258,7 +1287,9 @@ function smartPlayDecision(
       if (opponentMinHand <= 2) {
         return { action: 'play', cards: [byDesc[0]] };
       }
-      return { action: 'play', cards: [player.hand[0]] };
+      // Lead our LOWEST single — save the high card to respond with.
+      const byAsc = [...player.hand].sort((a, b) => rankValue(a.rank) - rankValue(b.rank));
+      return { action: 'play', cards: [byAsc[0]] };
     }
 
     // (b) Teammate has 1-2 cards — lead with singles to give them a chance to play out.
@@ -1500,7 +1531,7 @@ function smartPlayDecision(
       //     Among winners, prefer 2-singles over bombs (preserve bombs),
       //     then smallest bomb. Fires BEFORE defensive mode because
       //     reducing trapped-card count is the goal even in losing races.
-      if (hasStrandedLowCard(player.hand) && hasExtraPower(player.hand)) {
+      if (hasStrandedLowCard(player.hand, opts) && hasExtraPower(player.hand)) {
         const winningBeats = bp.filter(p =>
           classifyBomb(p) !== null || (p.length === 1 && p[0].rank === '2'),
         );
@@ -1840,6 +1871,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
       disableDefensiveMode: true,
       disableTeammateRescue: true,
       disableChaBait: true,
+      disableEndgameStrengthGate: true,
     });
   },
 };

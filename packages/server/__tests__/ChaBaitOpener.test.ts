@@ -182,11 +182,14 @@ describe('Cha-bait opener bonus', () => {
     expect(decision.cards!.length).toBe(2);
   });
 
-  it('Test 5: no bait — late game (hand=4, < 6 threshold)', () => {
+  it('Test 5: no bait — late game (hand=4, < 6 threshold), dump mode leads orphan', () => {
     // hand=4: bait requires hand.length>=6, so no bait. Also isEndgame=true.
-    // 3♥ single (endgame): 10 + avgRank(0) = 10
-    // 5-pair (endgame): 20 + avgRank(2) = 22
-    // Pair wins.
+    // Hand: [3♥, 5♣, 5♠, J♣]. No bombs, no special bomb → not super-strong.
+    // Dump-mode scoring (weak endgame hand):
+    //   3♥ single (orphan): 10 + 8 + (12-0)*2 = 42
+    //   5-pair: 20 + orphanCount(0)*8 + (12-2)*2 = 40
+    //   J♣ single (orphan): 10 + 8 + (12-8)*2 = 26
+    // 3♥ wins (42 > 40). Bot leads the low orphan to avoid trapping it.
     const p0Hand: Card[] = [
       card('3', 'hearts', true, 'p0-3h'),
       card('5', 'clubs', false, 'p0-5c'),
@@ -199,7 +202,9 @@ describe('Cha-bait opener bonus', () => {
     });
     const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
     expect(decision.action).toBe('play');
-    expect(decision.cards!.length).toBe(2);
+    // Dump mode: orphan 3♥ scores highest → leads single, not pair.
+    expect(decision.cards!.length).toBe(1);
+    expect(decision.cards![0].rank).toBe('3');
   });
 
   it('Test 6: bait fires via revealedRed10Count (teamsRevealed=false, p1 revealed red10)', () => {
