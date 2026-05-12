@@ -4,6 +4,42 @@ This document tracks impl-loop runs against the bot strategy code. Latest run on
 
 ---
 
+## Run 2026-05-11c — Hand-size-at-game-end metric + M5 validation (M6)
+
+Added a hand-size-at-game-end histogram to the strategy-fixes A/B test so we can directly measure the trap-rate question raised by the M5 fix. Reran the 15K-game A/B head-to-head with the new metric.
+
+### A/B results (15K games head-to-head, current SmartRacer vs LegacyPreFixes)
+
+**Payout:**
+- Net delta: +5,988 (was +5,200 before M5)
+- Δ/game: **+0.399** (was +0.347 before M5)
+- z-score: **6.04** (was 5.12 before M5)
+
+**Hand-size-at-game-end distribution (per player-instance across 90K instances):**
+
+| Hand size | Post-fix | Pre-fix | Δ (pp) |
+|---|---:|---:|---:|
+| 0 (out cleanly) | 75.06% | 71.20% | **+3.86** |
+| 1 (stuck — the trap) | **11.55%** | **13.56%** | **-2.01** |
+| 2 | 5.02% | 6.20% | -1.18 |
+| 3-5 | 5.32% | 5.99% | -0.67 |
+| 6+ | 3.04% | 3.05% | -0.01 |
+
+**Headline: M1-M5 reduce the hand=1 trap rate by ~15% (relative)** and the hand=2 rate by ~19%. The "out cleanly" rate jumps from 71.2% to 75.1%. The hand=6+ rate (race-loser cases unrelated to orphan-low traps) is unchanged, as expected.
+
+### What shipped (M6)
+
+- `packages/server/__tests__/simulator/strategyFixesAB.test.ts`: Captures `state.players[i].handSize` for each completed game via the existing `onGameComplete(_, gr, engine)` callback. Bucketed by post-fix vs pre-fix side (orientation-aware). Prints a histogram in the A/B output.
+- `packages/server/vitest.ab.config.ts`: New standalone vitest config. The default `vitest.config.ts` excludes `**/*AB.test.ts` (intentional — A/B tests are slow), but that made `npm run test:ab` fail because the explicit filter doesn't override the exclude. The new config re-includes A/B tests with a 10-minute timeout. Quality-of-life fix; `package.json` should be updated to use this config for `test:ab` (left to Kyle).
+
+No new behavioral changes; this is observability only.
+
+### Audit findings: 0 issues
+
+Single-file change (plus the config). Code is a straight extension of the existing `runHeadToHead` aggregation pattern. Regular test suite still passes (335/335).
+
+---
+
 ## Run 2026-05-11b — Hand=1 orphan-low trapping fix (M5)
 
 Source: human-reported pain point ("biggest flaw"). Empirical analysis of 115 game logs showed 30 bot-trapped-at-hand=1 instances (32% of all bot traps), all reconstructable cases held rank 3-8 cards. Root cause: the `isEndgame` race-mode in `scoreOpening` defavors leading low orphans at hand≤4 regardless of hand structure.
