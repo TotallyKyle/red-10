@@ -50,6 +50,8 @@ export interface BotPlayOptions {
    * high cards when hand ≤ 4, regardless of hand strength). Also reverts the
    * widened hasStrandedLowCard threshold to the original rv ≤ 2. */
   disableEndgameStrengthGate?: boolean;
+  /** If true, skip the stranded-orphan opener priority bump (legacy A/B). */
+  disableOrphanPriority?: boolean;
 }
 
 // ---- Inline strategies (simplified versions of simulator strategies) ----
@@ -376,6 +378,44 @@ function scoreOpening(
     const hasAces = cards.some(c => c.rank === 'A');
     if (hasTwos) score -= 20; // never lead with 2s in any format
     if (hasAces && !hasTwos) score -= 10; // avoid leading with Aces (unless part of 4,4,A)
+  }
+
+  // Stranded-orphan priority: if this candidate is a single-card play of a
+  // mid-rank orphan whose rank is mostly exhausted in public play, bump
+  // priority above flexible combos (short straights, low pairs). Asymmetric
+  // value: an orphan of a near-exhausted rank can only escape via leading,
+  // while flexible combos can be played in many future spots. See
+  // red-10-logs review 2026-05-13T19-09-07-Z4QL for the motivating game.
+  //
+  // Conditions:
+  //   - flag not disabled
+  //   - engine available (need cross-round play history)
+  //   - candidate is a SINGLE card
+  //   - card is structurally an orphan (no pair/straight/bomb home in hand)
+  //   - rank is mid (not '2' or 'A' — those have their own heuristics)
+  //   - I hold exactly 1 copy of that rank (singleton, not pair)
+  //   - rank is mostly exhausted: (publicly played + my 1 copy) >= 4 of 6
+  // Bonus magnitude: +20. Calibrated so a stranded orphan single beats a
+  // 3-card mid-rank straight (~57 pts) but loses to 4+-card straights
+  // (~67+ pts) and to full-hand-exit (+100 bonus).
+  if (
+    !opts.disableOrphanPriority &&
+    engine &&
+    cards.length === 1 &&
+    orphans.has(cards[0].id) &&
+    cards[0].rank !== '2' &&
+    cards[0].rank !== 'A'
+  ) {
+    const rank = cards[0].rank;
+    const ownCopies = hand.filter(c => c.rank === rank).length;
+    if (ownCopies === 1) {
+      const history = engine.getPlayedCardHistory();
+      const publicPlayed = history.filter(c => c.rank === rank).length;
+      const seenTotal = publicPlayed + 1; // my 1 copy
+      if (seenTotal >= 4) {
+        score += 20;
+      }
+    }
   }
 
   // Penalty for using bomb cards (preserve bombs for interrupts)
@@ -1848,6 +1888,22 @@ export const PreFixDStrategy: PlayerStrategy = {
 };
 
 /**
+ * SmartRacer with only the orphan-priority fix disabled. Mirrors PreFixDStrategy:
+ * lets A/B sims attribute the orphan-priority bump's effect in isolation.
+ */
+export const SmartRacerNoOrphanPriorityStrategy: PlayerStrategy = {
+  name: 'SmartRacerNoOrphanPriority',
+  decideDoubling(engine, playerId) {
+    return standardDoublingDecision(engine, playerId, 9);
+  },
+  decidePlay(engine, playerId) {
+    return smartPlayDecision(engine, playerId, {
+      disableOrphanPriority: true,
+    });
+  },
+};
+
+/**
  * Legacy variant for A/B testing only — disables all five strategy fixes
  * shipped 2026-04-29 / 2026-04-30 / 2026-05 (FSYS bomb preservation, 2v4
  * doubling penalty, single-bomb guard, must-block-passed check, defensive
@@ -1872,6 +1928,7 @@ export const LegacyPreFixesStrategy: PlayerStrategy = {
       disableTeammateRescue: true,
       disableChaBait: true,
       disableEndgameStrengthGate: true,
+      disableOrphanPriority: true,
     });
   },
 };

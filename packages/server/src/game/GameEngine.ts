@@ -44,6 +44,8 @@ export class GameEngine {
   private startingHands: Map<string, Card[]> = new Map();
   /** Epoch ms when the current game was dealt */
   private gameStartTime: number = 0;
+  /** All cards played publicly across all rounds of the current game, in play order */
+  private playedCardHistory: import('@red10/shared').Card[] = [];
 
   constructor(roomId: string, players: PlayerInit[]) {
     const playerStates: PlayerState[] = players.map((p) => ({
@@ -484,6 +486,7 @@ export class GameEngine {
       round.currentFormat = format;
       round.lastPlay = play;
       round.plays.push(play);
+      this.playedCardHistory.push(...play.cards);
       round.passCount = 0;
 
       // Check if player is out
@@ -549,6 +552,7 @@ export class GameEngine {
     }
     round.lastPlay = play;
     round.plays.push(play);
+    this.playedCardHistory.push(...play.cards);
     round.passCount = 0;
 
     // Check if player is out
@@ -1082,6 +1086,7 @@ export class GameEngine {
     round.currentFormat = newFormat;
     round.lastPlay = defusePlay;
     round.plays.push(defusePlay);
+    this.playedCardHistory.push(...defusePlay.cards);
     round.passCount = 0;
 
     // Check if player is out
@@ -1233,6 +1238,7 @@ export class GameEngine {
 
     round.lastPlay = play;
     round.plays.push(play);
+    this.playedCardHistory.push(...play.cards);
     round.passCount = 0;
 
     // Check if player is out
@@ -1343,6 +1349,7 @@ export class GameEngine {
 
     round.lastPlay = play;
     round.plays.push(play);
+    this.playedCardHistory.push(...play.cards);
 
     // Check if player is out
     if (player.hand.length === 0) {
@@ -1550,6 +1557,7 @@ export class GameEngine {
     this.state.previousGameWinner = previousWinner;
     this.state.lastRoundWin = null;
     this.gameResult = null;
+    this.playedCardHistory = [];
     this.playAgainPlayerIds.clear();
     this.quadrupleSkipped.clear();
 
@@ -1581,6 +1589,15 @@ export class GameEngine {
    */
   getState(): GameState {
     return this.state;
+  }
+
+  /**
+   * All cards that have been played publicly across all rounds of the current game,
+   * in play order. Used by bots for cross-round card counting (rank exhaustion).
+   * Cleared at game start / reset.
+   */
+  getPlayedCardHistory(): readonly import('@red10/shared').Card[] {
+    return this.playedCardHistory;
   }
 
   /**
