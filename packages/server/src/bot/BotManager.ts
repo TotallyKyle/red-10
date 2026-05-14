@@ -387,6 +387,14 @@ function scoreOpening(
   // while flexible combos can be played in many future spots. See
   // red-10-logs review 2026-05-13T19-09-07-Z4QL for the motivating game.
   //
+  // Follow-up gate (from human-player strategy advice): only fire when the
+  // bot has reliable ways to win FUTURE rounds — multi-2s, multi-As, any
+  // bomb, or any K+ pair. Without follow-up power, leading the orphan
+  // surrenders tempo with no recovery path; the straight becomes the bot's
+  // main weapon and must not be wasted on a passive lead. Initial broader
+  // rule produced z=-1.37 in isolated 15K A/B — the gate restricts firing
+  // to positions where dumping the orphan is genuinely recoverable.
+  //
   // Conditions:
   //   - flag not disabled
   //   - engine available (need cross-round play history)
@@ -395,6 +403,7 @@ function scoreOpening(
   //   - rank is mid (not '2' or 'A' — those have their own heuristics)
   //   - I hold exactly 1 copy of that rank (singleton, not pair)
   //   - rank is mostly exhausted: (publicly played + my 1 copy) >= 4 of 6
+  //   - I have strong follow-up: multi-2s OR multi-As OR any bomb OR K+ pair
   // Bonus magnitude: +20. Calibrated so a stranded orphan single beats a
   // 3-card mid-rank straight (~57 pts) but loses to 4+-card straights
   // (~67+ pts) and to full-hand-exit (+100 bonus).
@@ -413,7 +422,16 @@ function scoreOpening(
       const publicPlayed = history.filter(c => c.rank === rank).length;
       const seenTotal = publicPlayed + 1; // my 1 copy
       if (seenTotal >= 4) {
-        score += 20;
+        const handGroups = groupByRank(hand);
+        const handBombRanks = getBombRanks(hand);
+        const hasFollowup =
+          (handGroups.get('2')?.length ?? 0) >= 2 ||
+          (handGroups.get('A')?.length ?? 0) >= 2 ||
+          (handGroups.get('K')?.length ?? 0) >= 2 ||
+          handBombRanks.size >= 1;
+        if (hasFollowup) {
+          score += 20;
+        }
       }
     }
   }

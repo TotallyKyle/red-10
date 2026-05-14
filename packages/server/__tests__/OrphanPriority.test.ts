@@ -61,22 +61,23 @@ function setupOrphanEngine(p0Hand: Card[], publicHistory: Card[]): GameEngine {
 }
 
 describe('Orphan-priority opener bump', () => {
-  // Score reference for the Z4QL R3 scenario (hand=6):
-  //   Hand: [4♠, 6♦, 7♥2, 8♦, K♦, 2♣2]
-  //         Ranks: 4(1), 6(3), 7(4), 8(5), K(10), 2(12)
-  //         Straights: 6-7-8 (single 3-card straight)
-  //         Orphans (per findOrphanCards): 4♠, K♦, 2♣2
+  // Score reference for the Z4QL R3 scenario.
+  //
+  //   Dave's actual hand at R3 start (from the real game): contains the
+  //   A♦+A♠ pair which satisfies the multi-A follow-up gate. With that
+  //   gate satisfied and rank 4 publicly exhausted, the 4♠ orphan bump
+  //   fires and outscores the 6-7-8 straight.
   //
   //   4♠ single — without bump: 10 + orphan(8) + (12-1)*2 = 40
-  //   4♠ single — with bump (rank 4 exhausted): 40 + 20 = 60
+  //   4♠ single — with bump (gate passed): 40 + 20 = 60
   //   6-7-8 straight: cards*10=30 + (12-4)*2=16 + straight(5) = 51
-  //   K♦ single: 10 + 8 + (12-10)*2 = 22 (no bump, rank K not exhausted)
-  //   2♣2 single: 10 + 8 + 0 - 20 (hasTwos penalty) = -2
   //
   //   Without bump: straight(51) > 4♠(40) → straight wins
   //   With bump:    4♠(60)     > straight(51) → 4♠ wins
 
-  it('Z4QL R3 case: orphan 4 beats the 3-card straight when rank 4 is publicly exhausted', () => {
+  it('Z4QL R3 case: orphan 4 beats the straight when rank 4 exhausted AND follow-up power present', () => {
+    // Dave's actual hand at start of R3 (12 cards), including A♦+A♠ pair
+    // for follow-up. This is the real game position from the review.
     const p0Hand: Card[] = [
       card('4', 'spades', false, 'p0-4s'),
       card('6', 'diamonds', true, 'p0-6d'),
@@ -84,6 +85,12 @@ describe('Orphan-priority opener bump', () => {
       card('8', 'diamonds', true, 'p0-8d'),
       card('K', 'diamonds', true, 'p0-Kd'),
       card('2', 'clubs2', false, 'p0-2c2'),
+      card('J', 'clubs', false, 'p0-Jc'),
+      card('J', 'diamonds', true, 'p0-Jd'),
+      card('3', 'hearts', true, 'p0-3h'),
+      card('3', 'hearts2', true, 'p0-3h2'),
+      card('A', 'diamonds', true, 'p0-Ad'),
+      card('A', 'spades', false, 'p0-As'),
     ];
     const publicHistory: Card[] = [
       card('4', 'clubs2', false, 'h-4c2'),
@@ -106,6 +113,8 @@ describe('Orphan-priority opener bump', () => {
       card('8', 'diamonds', true, 'p0-8d'),
       card('K', 'diamonds', true, 'p0-Kd'),
       card('2', 'clubs2', false, 'p0-2c2'),
+      card('A', 'diamonds', true, 'p0-Ad'),
+      card('A', 'spades', false, 'p0-As'),
     ];
     const publicHistory: Card[] = [
       card('4', 'clubs2', false, 'h-4c2'),
@@ -115,9 +124,63 @@ describe('Orphan-priority opener bump', () => {
     const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
     expect(decision.action).toBe('play');
     expect(decision.cards!.length).toBe(3);
-    // The straight 6-7-8
     const ranks = decision.cards!.map(c => c.rank).sort();
     expect(ranks).toEqual(['6', '7', '8']);
+  });
+
+  it('follow-up gate: rank exhausted but NO follow-up power → no bump, straight wins', () => {
+    // Hand has the orphan 4 + 6-7-8 straight + filler, but no follow-up
+    // resources (no multi-2s, no multi-As, no K-pair, no bombs).
+    // Per human-strategy advice (Player 2: "if neither [multi-2s nor high
+    // straight] then the single" — but the implementation gates more
+    // strictly: no follow-up means the straight is the bot's main weapon
+    // and must not be wasted on a passive orphan lead).
+    const p0Hand: Card[] = [
+      card('4', 'spades', false, 'p0-4s'),
+      card('6', 'diamonds', true, 'p0-6d'),
+      card('7', 'hearts2', true, 'p0-7h2'),
+      card('8', 'diamonds', true, 'p0-8d'),
+      card('Q', 'clubs', false, 'p0-Qc'),
+      card('J', 'hearts', true, 'p0-Jh'),
+    ];
+    const publicHistory: Card[] = [
+      card('4', 'clubs2', false, 'h-4c2'),
+      card('4', 'diamonds', true, 'h-4d'),
+      card('4', 'clubs', false, 'h-4c'),
+      card('4', 'hearts2', true, 'h-4h2'),
+    ];
+    const engine = setupOrphanEngine(p0Hand, publicHistory);
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    expect(decision.cards!.length).toBe(3);
+    const ranks = decision.cards!.map(c => c.rank).sort();
+    expect(ranks).toEqual(['6', '7', '8']);
+  });
+
+  it('follow-up gate: multi-2s alone qualify as follow-up power', () => {
+    // Pair of 2s should pass the follow-up gate per Player 2: "if i have
+    // multiple 2's i def lead with the single."
+    const p0Hand: Card[] = [
+      card('4', 'spades', false, 'p0-4s'),
+      card('6', 'diamonds', true, 'p0-6d'),
+      card('7', 'hearts2', true, 'p0-7h2'),
+      card('8', 'diamonds', true, 'p0-8d'),
+      card('Q', 'clubs', false, 'p0-Qc'),
+      card('J', 'hearts', true, 'p0-Jh'),
+      card('2', 'clubs', false, 'p0-2c'),
+      card('2', 'spades', false, 'p0-2s'),
+    ];
+    const publicHistory: Card[] = [
+      card('4', 'clubs2', false, 'h-4c2'),
+      card('4', 'diamonds', true, 'h-4d'),
+      card('4', 'clubs', false, 'h-4c'),
+      card('4', 'hearts2', true, 'h-4h2'),
+    ];
+    const engine = setupOrphanEngine(p0Hand, publicHistory);
+    const decision = SmartRacerStrategy.decidePlay(engine, 'p0');
+    expect(decision.action).toBe('play');
+    expect(decision.cards!.length).toBe(1);
+    expect(decision.cards![0].rank).toBe('4');
   });
 
   it('high orphan (A): bump does NOT fire — straight is chosen even with 4 Aces public', () => {
